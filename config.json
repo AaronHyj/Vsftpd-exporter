@@ -1,0 +1,8 @@
+{
+    "ftp_server": "localhost",
+    "ftp_port": "",
+    "ftp_username": "",
+    "ftp_password": "",
+    "log_file_path": "/var/log/xferlog"
+}
+
