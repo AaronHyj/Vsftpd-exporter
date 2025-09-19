@@ -1,8 +1,10 @@
 {
-    "ftp_server": "localhost",
-    "ftp_port": "",
-    "ftp_username": "",
-    "ftp_password": "",
-    "log_file_path": "/var/log/xferlog"
+    "ftp_host": "172.25.234.201",
+    "ftp_port": "6069",
+    "ftp_user": "ostore",
+    "ftp_password": "iptv!#$os",
+    "log_file_path": "/var/log/xferlog",
+    "listen_port": "9100",
+    "check_interval": 30
 }
 
