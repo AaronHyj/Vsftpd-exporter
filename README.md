@@ -55,7 +55,7 @@ go run vsftp-exporter.go
     "ftp_port": "21",                 // FTP 服务器端口
     "ftp_user": "testuser",           // FTP 用户名
     "ftp_password": "testpass",       // FTP 密码
-    "log_file_path": "/var/log/xferlog", // FTP 日志文件路径
+    "Xferlog_file_path": "/var/log/xferlog", // FTP 日志文件路径
     "listen_port": "9100",            // Exporter 监听端口
     "check_interval": 30               // 检查间隔（秒）
 }
@@ -69,7 +69,7 @@ go run vsftp-exporter.go
 | `ftp_port` | string | 是 | 21 | FTP 服务器端口号 |
 | `ftp_user` | string | 是 | - | FTP 登录用户名 |
 | `ftp_password` | string | 是 | - | FTP 登录密码 |
-| `log_file_path` | string | 是 | /var/log/xferlog | vsftpd 日志文件路径 |
+| `Xferlog_file_path` | string | 是 | /var/log/xferlog | vsftpd 日志文件路径 |
 | `listen_port` | string | 否 | 9100 | Exporter HTTP 服务监听端口 |
 | `check_interval` | int | 否 | 30 | 监控检查间隔时间（秒） |
 

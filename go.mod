@@ -1,10 +1,13 @@
 module vsftp-exporter.go
 
-go 1.19
+go 1.24.0
+
+toolchain go1.24.1
 
 require (
 	github.com/jlaffaye/ftp v0.2.0
 	github.com/prometheus/client_golang v1.19.1
+	golang.org/x/crypto v0.43.0
 )
 
 require (
@@ -15,6 +18,6 @@ require (
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
-	golang.org/x/sys v0.17.0 // indirect
+	golang.org/x/sys v0.37.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 )

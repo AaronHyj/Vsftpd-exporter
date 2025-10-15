@@ -1,10 +1,16 @@
 {
-    "ftp_host": "172.25.234.201",
+    "target_host": "172.25.234.201",
     "ftp_port": "6069",
     "ftp_user": "ostore",
     "ftp_password": "iptv!#$os",
-    "log_file_path": "/var/log/xferlog",
-    "listen_port": "9100",
-    "check_interval": 30
+    "need_ssh":  true,
+    "ssh_port": "22",
+    "ssh_user": "root",
+    "ssh_password": "Newbokong@2022",
+    "Xferlog_file_path": "/var/log/xferlog",
+    "listen_port": "9101",
+    "check_interval": 30,
+    "vsftplog_enabled": true,
+    "vsftplog_file_path": "/var/log/vsftpd.log"
 }
 
