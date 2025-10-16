@@ -23,71 +23,77 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "NO"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "YES"
+                }
+              },
+              "type": "value"
             }
-          },
-          "mappings": [],
+          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "red",
-                "value": 80
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "unit": "short"
+          "unit": "none"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 0
+        "y": 12
       },
       "id": 1,
       "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "single"
-        }
+        "textMode": "value"
       },
+      "pluginVersion": "8.0.0",
       "targets": [
         {
           "expr": "vsftp_login_success{job=\"$job\", instance=\"$instance\"}",
@@ -97,7 +103,7 @@
         }
       ],
       "title": "FTP登录状态",
-      "type": "timeseries"
+      "type": "stat"
     },
     {
       "datasource": "Prometheus",
@@ -150,13 +156,26 @@
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 12
       },
       "id": 2,
       "options": {
@@ -249,7 +268,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 20
       },
       "id": 3,
       "options": {
@@ -328,7 +347,7 @@
               }
             ]
           },
-          "unit": "bytes"
+          "unit": "MBs"
         },
         "overrides": []
       },
@@ -336,7 +355,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 20
       },
       "id": 4,
       "options": {
@@ -351,74 +370,22 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[5m])",
+          "expr": "rate(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[5m]) / 1024 / 1024",
           "interval": "",
-          "legendFormat": "上传字节速率",
+          "legendFormat": "上传速率",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[5m])",
+          "expr": "rate(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[5m]) / 1024 / 1024",
           "interval": "",
-          "legendFormat": "下载字节速率",
+          "legendFormat": "下载速率",
           "refId": "B"
         }
       ],
-      "title": "传输字节速率",
+      "title": "传输速率 (MB/s)",
       "type": "timeseries"
     },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
-            }
-          },
-          "mappings": []
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 16
-      },
-      "id": 5,
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "pieType": "pie",
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
-        {
-          "expr": "vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}",
-          "interval": "",
-          "legendFormat": "{{le}}s",
-          "refId": "A"
-        }
-      ],
-      "title": "传输耗时分布",
-      "type": "piechart"
-    },
+
     {
       "datasource": "Prometheus",
       "fieldConfig": {
@@ -450,9 +417,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 16
+        "w": 6,
+        "x": 0,
+        "y": 28
       },
       "id": 6,
       "options": {
@@ -505,15 +472,15 @@
               }
             ]
           },
-          "unit": "Bps"
+          "unit": "MBs"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 16
+        "w": 6,
+        "x": 6,
+        "y": 28
       },
       "id": 7,
       "options": {
@@ -532,14 +499,88 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "vsftp_average_transfer_speed_bytes_per_second{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_average_transfer_speed_bytes_per_second{job=\"$job\", instance=\"$instance\"} / 1024 / 1024",
           "interval": "",
           "legendFormat": "平均传输速度",
           "refId": "A"
         }
       ],
-      "title": "平均传输速度",
+      "title": "平均传输速度 (MB/s)",
       "type": "gauge"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 9,
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "cellValues": {
+          "unit": "short"
+        },
+        "color": {
+          "exponent": 0.5,
+          "fill": "dark-orange",
+          "mode": "spectrum",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "show": true,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "s"
+        }
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "increase(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m])",
+          "format": "heatmap",
+          "interval": "",
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ],
+      "title": "传输耗时热力图",
+      "type": "heatmap"
     },
     {
       "datasource": "Prometheus",
@@ -597,8 +638,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 24
+        "x": 12,
+        "y": 28
       },
       "id": 8,
       "options": {
@@ -629,9 +670,21 @@
           "interval": "",
           "legendFormat": "连接超时率",
           "refId": "C"
+        },
+        {
+          "expr": "rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\"}[5m])",
+          "interval": "",
+          "legendFormat": "传输错误 - {{type}}",
+          "refId": "D"
+        },
+        {
+          "expr": "rate(vsftp_max_connections_reached_total{job=\"$job\", instance=\"$instance\"}[5m])",
+          "interval": "",
+          "legendFormat": "达到最大连接数限制",
+          "refId": "E"
         }
       ],
-      "title": "错误统计",
+      "title": "FTP服务错误统计",
       "type": "timeseries"
     },
     {
@@ -683,17 +736,17 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "s"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 24
+        "w": 24,
+        "x": 0,
+        "y": 36
       },
-      "id": 9,
+      "id": 11,
       "options": {
         "legend": {
           "calcs": [],
@@ -706,19 +759,31 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\"}[5m])",
+          "expr": "histogram_quantile(0.50, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
           "interval": "",
-          "legendFormat": "传输错误 - {{type}}",
+          "legendFormat": "P50 (中位数)",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_max_connections_reached_total{job=\"$job\", instance=\"$instance\"}[5m])",
+          "expr": "histogram_quantile(0.90, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
           "interval": "",
-          "legendFormat": "达到最大连接数限制",
+          "legendFormat": "P90",
           "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "interval": "",
+          "legendFormat": "P95",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "interval": "",
+          "legendFormat": "P99",
+          "refId": "D"
         }
       ],
-      "title": "传输错误统计",
+      "title": "传输耗时趋势",
       "type": "timeseries"
     },
     {
@@ -726,53 +791,76 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
           "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "vis": false
-            }
+            "align": "auto",
+            "displayMode": "auto",
+            "inspect": false
           },
-          "mappings": []
+          "mappings": [],
+          "min": 0,
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 10
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 44
       },
       "id": 10,
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "pieType": "pie",
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "tooltip": {
-          "mode": "single"
-        }
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Value"
+          }
+        ]
       },
       "targets": [
         {
-          "expr": "vsftp_file_count_by_extension{job=\"$job\", instance=\"$instance\"}",
+          "expr": "increase(vsftp_file_count_by_extension{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "instant": true,
           "interval": "",
           "legendFormat": "{{extension}}",
           "refId": "A"
         }
       ],
-      "title": "按文件扩展名统计",
-      "type": "piechart"
+      "title": "按文件扩展名统计 (选定时间范围内增量)",
+      "type": "table"
     },
     {
       "datasource": "Prometheus",
@@ -791,15 +879,15 @@
               },
               {
                 "color": "yellow",
-                "value": 1000000
+                "value": 1
               },
               {
                 "color": "red",
-                "value": 10000000
+                "value": 5
               }
             ]
           },
-          "unit": "Bps"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -807,7 +895,82 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 4
+      },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "text": {},
+        "textMode": "auto"
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "interval": "",
+          "legendFormat": "平均传输时间 (P50)",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "interval": "",
+          "legendFormat": "95%传输时间 (P95)",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(1.0, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "interval": "",
+          "legendFormat": "最大传输时间",
+          "refId": "C"
+        }
+      ],
+      "title": "传输耗时统计",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "MBs"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
       },
       "id": 11,
       "options": {
@@ -826,13 +989,13 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "vsftp_bandwidth_usage_bytes_per_second{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_bandwidth_usage_bytes_per_second{job=\"$job\", instance=\"$instance\"} / 1024 / 1024",
           "interval": "",
           "legendFormat": "带宽使用率",
           "refId": "A"
         }
       ],
-      "title": "带宽使用率",
+      "title": "带宽使用率 (MB/s)",
       "type": "gauge"
     },
     {
@@ -840,11 +1003,65 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
-          "custom": {
-            "align": "auto",
-            "displayMode": "auto"
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "light-blue",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 12,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "vsftp_files_sent_total{job=\"$job\", instance=\"$instance\"}",
+          "interval": "",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "title": "上传文件总数",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
           },
           "mappings": [],
           "thresholds": {
@@ -855,61 +1072,176 @@
                 "value": null
               },
               {
-                "color": "red",
-                "value": 80
+                "color": "light-green",
+                "value": 100
               }
             ]
-          }
+          },
+          "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 40
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
       },
-      "id": 12,
+      "id": 14,
       "options": {
-        "showHeader": true
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
       },
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "vsftp_files_sent_total{job=\"$job\", instance=\"$instance\"}",
-          "format": "table",
-          "instant": true,
-          "interval": "",
-          "legendFormat": "上传文件总数",
-          "refId": "A"
-        },
-        {
           "expr": "vsftp_files_received_total{job=\"$job\", instance=\"$instance\"}",
-          "format": "table",
-          "instant": true,
           "interval": "",
-          "legendFormat": "下载文件总数",
-          "refId": "B"
-        },
-        {
-          "expr": "vsftp_login_total{job=\"$job\", instance=\"$instance\"}",
-          "format": "table",
-          "instant": true,
-          "interval": "",
-          "legendFormat": "登录总次数",
-          "refId": "C"
-        },
-        {
-          "expr": "vsftp_last_login_time{job=\"$job\", instance=\"$instance\"}",
-          "format": "table",
-          "instant": true,
-          "interval": "",
-          "legendFormat": "最后登录时间",
-          "refId": "D"
+          "legendFormat": "",
+          "refId": "A"
         }
       ],
-      "title": "统计汇总表",
-      "type": "table"
+      "title": "下载文件总数",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              },
+              {
+                "color": "light-orange",
+                "value": 50
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "vsftp_login_total{job=\"$job\", instance=\"$instance\"}",
+          "interval": "",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "title": "登录总次数",
+      "type": "stat"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              },
+              {
+                "color": "light-purple",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "dateTimeAsLocal"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "vsftp_last_login_time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "8.0.0",
+      "targets": [
+        {
+          "expr": "vsftp_last_login_time{job=\"$job\", instance=\"$instance\"} * 1000",
+          "interval": "",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "title": "最后登录时间",
+      "type": "stat"
     },
     {
       "datasource": "Prometheus",
@@ -960,7 +1292,7 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -968,7 +1300,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 52
       },
       "id": 13,
       "options": {
@@ -995,7 +1327,7 @@
           "refId": "B"
         }
       ],
-      "title": "客户端文件传输统计",
+      "title": "客户端文件传输统计 (文件数/秒)",
       "type": "timeseries"
     }
   ],

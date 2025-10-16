@@ -9,7 +9,7 @@
     "ssh_password": "Newbokong@2022",
     "Xferlog_file_path": "/var/log/xferlog",
     "listen_port": "9101",
-    "check_interval": 30,
+    "check_interval": 2,
     "vsftplog_enabled": true,
     "vsftplog_file_path": "/var/log/vsftpd.log"
 }

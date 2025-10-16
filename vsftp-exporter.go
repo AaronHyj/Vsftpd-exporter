@@ -878,31 +878,44 @@ func checkConnections(config *Config, state *ExporterState) error {
 // 参数:
 //   line: 包含时间戳的日志行文本
 // 返回:
-//   int64: 成功解析则返回Unix时间戳，失败则返回0
+//   int64: 成功解析则返回Unix时间戳，失败则返回当前时间的Unix时间戳
 func extractTimestamp(line string) int64 {
-	// 尝试匹配第一种时间戳格式：YYYY-MM-DD HH:MM:SS
-	// 例如：2024-01-15 14:30:25
-	timeRegex1 := regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`)
+	// 定义多种时间戳格式和对应的解析模式
+	timeFormats := []struct {
+		regex  *regexp.Regexp
+		layout string
+	}{
+		// 格式1：YYYY-MM-DD HH:MM:SS
+		{regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`), "2006-01-02 15:04:05"},
+		
+		// 格式2：Mon Jan _2 HH:MM:SS YYYY (vsftpd常用格式，支持单数字日期)
+		{regexp.MustCompile(`(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})`), "Mon Jan _2 15:04:05 2006"},
+		
+		// 格式3：Mon Jan 02 15:04:05 2006 (标准syslog格式，双数字日期)
+		{regexp.MustCompile(`(\w{3} \w{3} \d{2} \d{2}:\d{2}:\d{2} \d{4})`), "Mon Jan 02 15:04:05 2006"},
+		
+		// 格式4：DD/MM/YYYY HH:MM:SS
+		{regexp.MustCompile(`(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})`), "02/01/2006 15:04:05"},
+		
+		// 格式5：MM/DD/YYYY HH:MM:SS
+		{regexp.MustCompile(`(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})`), "01/02/2006 15:04:05"},
+		
+		// 格式6：YYYY/MM/DD HH:MM:SS
+		{regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})`), "2006/01/02 15:04:05"},
+	}
 	
-	// 尝试匹配第二种时间戳格式：Mon Jan _2 HH:MM:SS YYYY
-	// 例如：Mon Jan 15 14:30:25 2024
-	timeRegex2 := regexp.MustCompile(`(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})`)
-	
-	// 尝试解析第一种格式
-	if match := timeRegex1.FindString(line); match != "" {
-		if t, err := time.Parse("2006-01-02 15:04:05", match); err == nil {
-			return t.Unix() // 返回Unix时间戳
+	// 尝试解析各种格式，使用本地时区
+	for _, format := range timeFormats {
+		if match := format.regex.FindString(line); match != "" {
+			if t, err := time.ParseInLocation(format.layout, match, time.Local); err == nil {
+				return t.Unix() // 返回Unix时间戳
+			}
 		}
 	}
 	
-	// 尝试解析第二种格式
-	if match := timeRegex2.FindString(line); match != "" {
-		if t, err := time.Parse("Mon Jan _2 15:04:05 2006", match); err == nil {
-			return t.Unix() // 返回Unix时间戳
-		}
-	}
-	
-	return 0 // 无法解析时间戳，返回0
+	// 如果所有格式都无法解析，返回当前时间的Unix时间戳
+	// 这样可以避免显示"56年前"这样的错误时间
+	return time.Now().Unix()
 }
 
 // parseTransferLog 解析传输日志，提取字节数、文件名和传输时间
@@ -946,19 +959,19 @@ func parseTransferLog(line, direction string) (bytes int64, filename string, dur
 // extractFileExtension 从文件名中提取扩展名
 func extractFileExtension(filename string) string {
 	if filename == "" {
-		return ""
+		return "no_extension"
 	}
 	
 	// 获取文件扩展名
 	ext := strings.ToLower(filepath.Ext(filename))
 	
-	// 只返回我们关心的扩展名
-	switch ext {
-	case ".xml", ".ts", ".jpg", ".m3u8", ".png":
-		return ext
-	default:
-		return ""
+	// 如果没有扩展名，返回"no_extension"
+	if ext == "" {
+		return "no_extension"
 	}
+	
+	// 返回所有扩展名（去掉点号）
+	return ext[1:] // 去掉开头的点号
 }
 
 // expandLogFilePath 扩展日志文件路径，支持环境变量和相对路径
@@ -1312,6 +1325,10 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState) error {
 			// 尝试解析时间戳
 			if timestamp := extractTimestamp(line); timestamp > 0 {
 				ftpLoginTime.Set(float64(timestamp))
+			} else {
+				// 如果无法解析时间戳，使用当前时间
+				// 这样可以避免显示"56年前"这样的错误时间
+				ftpLoginTime.Set(float64(time.Now().Unix()))
 			}
 			ftpLoginTotal.Inc()
 		}
@@ -1350,18 +1367,27 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState) error {
 	if !state.lastBandwidthCheck.IsZero() {
 		timeDiff := currentTime.Sub(state.lastBandwidthCheck).Seconds()
 		if timeDiff > 0 {
-			bytesDiff := totalBytesThisRound
-			bandwidthRate := float64(bytesDiff) / timeDiff
-			bandwidthUsage.Set(bandwidthRate)
+			// 计算当前轮次的带宽使用率
+			currentBandwidthRate := float64(totalBytesThisRound) / timeDiff
+			bandwidthUsage.Set(currentBandwidthRate)
 			
-			// 计算平均传输速度
+			// 计算累计平均传输速度
 			totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
-			if totalBytes > 0 && timeDiff > 0 {
-				averageSpeed := float64(totalBytes) / timeDiff
-				averageTransferSpeed.Set(averageSpeed)
+			if totalBytes > 0 {
+				// 使用程序运行时间计算平均速度
+				programRunTime := currentTime.Sub(state.lastProcessedTime).Seconds()
+				if programRunTime > 0 {
+					averageSpeed := float64(totalBytes) / programRunTime
+					averageTransferSpeed.Set(averageSpeed)
+				}
 			}
 		}
+	} else {
+		// 首次运行时初始化
+		state.lastBandwidthCheck = currentTime
 	}
+	
+	// 更新检查时间和累计字节数
 	state.lastBandwidthCheck = currentTime
 	state.lastBytesTransferred += totalBytesThisRound
 
@@ -1479,7 +1505,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState) error 
 			// 更新指标
 			userLoginsTotal.WithLabelValues(username).Inc()
 			userConnectionsTotal.WithLabelValues(username).Inc()
+			ftpLoginTotal.Inc() // 修复：添加总登录次数计数
 			loginCount++
+			
+			// 更新最后登录时间指标
+			ftpLoginTime.Set(float64(eventTime.Unix()))
 
 			// 更新状态跟踪
 			state.clientLastActivity[clientIP] = eventTime
@@ -1516,9 +1546,21 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState) error 
 // parseVsftpdTimestamp 解析vsftpd.log中的时间戳格式
 // 格式: Wed Oct 15 15:34:29 2025
 func parseVsftpdTimestamp(timeStr string) (time.Time, error) {
-	// vsftpd使用的时间格式
-	layout := "Mon Jan 2 15:04:05 2006"
-	return time.Parse(layout, timeStr)
+	// vsftpd使用的时间格式，支持单数字日期（带前导空格）
+	layouts := []string{
+		"Mon Jan _2 15:04:05 2006", // 支持单数字日期，如 "Thu Oct  6 10:58:33 2025"
+		"Mon Jan 02 15:04:05 2006", // 支持双数字日期，如 "Thu Oct 16 10:58:33 2025"
+		"Mon Jan 2 15:04:05 2006",  // 标准格式
+	}
+	
+	// 使用本地时区解析时间，而不是UTC
+	for _, layout := range layouts {
+		if t, err := time.ParseInLocation(layout, timeStr, time.Local); err == nil {
+			return t, nil
+		}
+	}
+	
+	return time.Time{}, fmt.Errorf("无法解析时间戳: %s", timeStr)
 }
 
 // updateUniqueClientsMetric 更新唯一客户端数量指标
