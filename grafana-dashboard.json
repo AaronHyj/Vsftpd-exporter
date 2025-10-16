@@ -351,13 +351,13 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_transfer_bytes_total{job=\"$job\", instance=\"$instance\", direction=\"upload\"}[5m])",
+          "expr": "rate(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[5m])",
           "interval": "",
           "legendFormat": "上传字节速率",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_transfer_bytes_total{job=\"$job\", instance=\"$instance\", direction=\"download\"}[5m])",
+          "expr": "rate(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[5m])",
           "interval": "",
           "legendFormat": "下载字节速率",
           "refId": "B"
@@ -910,6 +910,93 @@
       ],
       "title": "统计汇总表",
       "type": "table"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "vis": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 13,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", direction=\"upload\"}[5m])",
+          "interval": "",
+          "legendFormat": "上传文件速率 - {{client_ip}}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", direction=\"download\"}[5m])",
+          "interval": "",
+          "legendFormat": "下载文件速率 - {{client_ip}}",
+          "refId": "B"
+        }
+      ],
+      "title": "客户端文件传输统计",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

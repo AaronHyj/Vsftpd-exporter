@@ -8,11 +8,14 @@ Vsftpd Exporter 是一个专门为 vsftpd FTP 服务器设计的 Prometheus 监�
 
 ### 主要功能
 
-- **连接监控**: 实时监控 FTP 连接数、并发传输数等
+- **连接监控**: 实时监控 FTP 连接数、并发传输数、客户端连接统计等
 - **传输统计**: 统计文件上传/下载次数、传输字节数、传输速度等
 - **错误监控**: 监控登录失败、传输错误、连接超时等异常情况
-- **性能分析**: 提供传输耗时分布、带宽使用率等性能指标
+- **性能分析**: 提供传输耗时分布、带宽使用率、连接延迟等性能指标
 - **文件统计**: 按文件扩展名统计传输的文件类型
+- **用户活动监控**: 按用户名和客户端IP统计登录和连接活动
+- **SSH远程监控**: 支持通过SSH连接到远程服务器读取日志文件
+- **vsftpd详细日志解析**: 解析vsftpd.log获取更详细的连接和用户活动信息
 - **健康检查**: 定期检查 FTP 服务可用性
 
 ## 安装和编译
@@ -51,13 +54,19 @@ go run vsftp-exporter.go
 
 ```json
 {
-    "ftp_host": "localhost",          // FTP 服务器地址
+    "target_host": "localhost",       // 目标服务器地址
     "ftp_port": "21",                 // FTP 服务器端口
     "ftp_user": "testuser",           // FTP 用户名
     "ftp_password": "testpass",       // FTP 密码
-    "Xferlog_file_path": "/var/log/xferlog", // FTP 日志文件路径
-    "listen_port": "9100",            // Exporter 监听端口
-    "check_interval": 30               // 检查间隔（秒）
+    "need_ssh": false,                // 是否需要通过SSH连接
+    "ssh_port": "22",                 // SSH连接端口
+    "ssh_user": "root",               // SSH登录用户名
+    "ssh_password": "password",       // SSH登录密码
+    "Xferlog_file_path": "/var/log/xferlog", // FTP传输日志文件路径
+    "listen_port": "9101",            // Exporter 监听端口
+    "check_interval": 30,             // 检查间隔（秒）
+    "vsftplog_enabled": true,         // 是否启用vsftpd详细日志解析
+    "vsftplog_file_path": "/var/log/vsftpd.log" // vsftpd详细日志文件路径
 }
 ```
 
@@ -65,13 +74,19 @@ go run vsftp-exporter.go
 
 | 配置项 | 类型 | 必需 | 默认值 | 说明 |
 |--------|------|------|--------|------|
-| `ftp_host` | string | 是 | localhost | FTP 服务器主机地址 |
+| `target_host` | string | 是 | localhost | 目标服务器地址，支持IP地址或域名 |
 | `ftp_port` | string | 是 | 21 | FTP 服务器端口号 |
-| `ftp_user` | string | 是 | - | FTP 登录用户名 |
-| `ftp_password` | string | 是 | - | FTP 登录密码 |
-| `Xferlog_file_path` | string | 是 | /var/log/xferlog | vsftpd 日志文件路径 |
-| `listen_port` | string | 否 | 9100 | Exporter HTTP 服务监听端口 |
+| `ftp_user` | string | 是 | - | FTP 登录用户名，用于连接测试 |
+| `ftp_password` | string | 是 | - | FTP 登录密码，用于连接测试 |
+| `need_ssh` | bool | 否 | false | 是否需要通过SSH连接到目标服务器 |
+| `ssh_port` | string | 否 | 22 | SSH连接端口 |
+| `ssh_user` | string | 否 | - | SSH登录用户名（当need_ssh为true时必需） |
+| `ssh_password` | string | 否 | - | SSH登录密码（当need_ssh为true时必需） |
+| `Xferlog_file_path` | string | 是 | /var/log/xferlog | vsftpd传输日志文件路径 |
+| `listen_port` | string | 否 | 9101 | Exporter HTTP 服务监听端口 |
 | `check_interval` | int | 否 | 30 | 监控检查间隔时间（秒） |
+| `vsftplog_enabled` | bool | 否 | false | 是否启用vsftpd详细日志解析 |
+| `vsftplog_file_path` | string | 否 | /var/log/vsftpd.log | vsftpd详细日志文件路径 |
 
 ## 使用方法
 
@@ -85,14 +100,37 @@ go run vsftp-exporter.go
 ./vsftp-exporter -config=/path/to/config.json
 ```
 
+### SSH远程监控配置
+
+当需要监控远程服务器上的vsftpd服务时，可以启用SSH远程监控功能：
+
+1. **配置SSH连接**：
+   ```json
+   {
+       "need_ssh": true,
+       "ssh_port": "22",
+       "ssh_user": "root",
+       "ssh_password": "your_password"
+   }
+   ```
+
+2. **确保SSH访问权限**：
+   - SSH用户需要有读取日志文件的权限
+   - 建议使用密钥认证替代密码认证（生产环境）
+   - 确保目标服务器SSH服务正常运行
+
+3. **日志文件路径**：
+   - `Xferlog_file_path`: vsftpd传输日志路径（通常为 `/var/log/xferlog`）
+   - `vsftplog_file_path`: vsftpd详细日志路径（通常为 `/var/log/vsftpd.log`）
+
 ### 验证运行状态
 
 ```bash
 # 检查指标端点
-curl http://localhost:9100/metrics
+curl http://localhost:9101/metrics
 
 # 检查健康状态
-curl http://localhost:9100/health
+curl http://localhost:9101/health
 ```
 
 ### 系统服务配置
@@ -129,29 +167,34 @@ sudo systemctl start vsftp-exporter
 
 | 指标名称 | 类型 | 说明 |
 |----------|------|------|
-| `ftp_login_success` | Gauge | FTP 登录成功状态 (1=成功, 0=失败) |
-| `ftp_connections` | Gauge | 当前 FTP 总连接数 |
-| `established_connections` | Gauge | 已建立的连接数 |
-| `close_wait_connections` | Gauge | 等待关闭的连接数 |
+| `vsftp_login_success` | Gauge | FTP 登录成功状态 (1=成功, 0=失败) |
+| `vsftp_connections` | Gauge | 当前 FTP 总连接数 |
+| `vsftp_established_connections` | Gauge | 已建立的连接数 |
+| `vsftp_close_wait_connections` | Gauge | 等待关闭的连接数 |
 | `vsftp_concurrent_transfers` | Gauge | 当前并发传输数 |
 
 ### 传输统计指标
 
 | 指标名称 | 类型 | 标签 | 说明 |
 |----------|------|------|------|
-| `files_downloaded` | Counter | - | 文件下载总次数 |
-| `files_uploaded` | Counter | - | 文件上传总次数 |
-| `vsftp_transfer_bytes_total` | Counter | direction | 传输字节总数 (upload/download) |
+| `vsftp_files_received_total` | Gauge | - | 文件下载总数 |
+| `vsftp_files_sent_total` | Gauge | - | 文件上传总数 |
+| `vsftp_login_total` | Counter | - | FTP 登录总次数 |
+| `vsftp_upload_total` | Counter | - | FTP 上传操作总次数 |
+| `vsftp_download_total` | Counter | - | FTP 下载操作总次数 |
+| `vsftp_upload_bytes_total` | Counter | - | 上传字节总数 |
+| `vsftp_download_bytes_total` | Counter | - | 下载字节总数 |
 | `vsftp_transfer_duration_seconds` | Histogram | - | 文件传输耗时分布 |
 | `vsftp_average_transfer_speed_bytes_per_second` | Gauge | - | 平均传输速度 (字节/秒) |
 | `vsftp_bandwidth_usage_bytes_per_second` | Gauge | - | 当前带宽使用率 (字节/秒) |
+| `vsftp_last_login_time` | Gauge | - | 最后一次成功FTP登录的时间戳 |
 
 ### 错误和异常指标
 
 | 指标名称 | 类型 | 标签 | 说明 |
 |----------|------|------|------|
 | `vsftp_failed_logins_total` | Counter | - | 登录失败总次数 |
-| `vsftp_transfer_errors_total` | Counter | type | 传输错误总数 (upload/download/timeout) |
+| `vsftp_transfer_errors_total` | Counter | type | 传输错误总数 (按错误类型分类) |
 | `vsftp_connection_timeouts_total` | Counter | - | 连接超时总次数 |
 | `vsftp_authentication_errors_total` | Counter | - | 认证错误总次数 |
 | `vsftp_max_connections_reached_total` | Counter | - | 达到最大连接数限制的次数 |
@@ -162,14 +205,25 @@ sudo systemctl start vsftp-exporter
 |----------|------|------|------|
 | `vsftp_file_count_by_extension` | Counter | extension | 按文件扩展名统计的文件数量 |
 
-### 性能指标
+### 客户端和用户统计指标
+
+| 指标名称 | 类型 | 标签 | 说明 |
+|----------|------|------|------|
+| `vsftp_client_connections_total` | Counter | client_ip | 按客户端IP统计的连接总数 |
+| `vsftp_unique_clients` | Gauge | - | 具有近期活动的唯一客户端IP地址数量 |
+| `vsftp_user_logins_total` | Counter | username | 按用户名统计的成功登录总数 |
+| `vsftp_user_connections_total` | Counter | username | 按用户名统计的连接总数 |
+| `vsftp_login_failures_by_client` | Counter | client_ip | 按客户端IP统计的登录失败次数 |
+| `vsftp_client_activity_by_hour` | Counter | hour | 按小时统计的客户端连接活动 |
+| `vsftp_client_files_total` | Counter | client_ip, direction | 按客户端IP和传输方向统计的文件传输总数 |
+
+### 高级监控指标
 
 | 指标名称 | 类型 | 说明 |
 |----------|------|------|
-| `ftp_login_time` | Gauge | FTP 登录响应时间 (毫秒) |
-| `ftp_login_total` | Counter | FTP 登录尝试总次数 |
-| `ftp_upload_total` | Counter | FTP 上传操作总次数 |
-| `ftp_download_total` | Counter | FTP 下载操作总次数 |
+| `vsftp_connection_login_delay_seconds` | Histogram | 连接到成功登录的时间延迟分布 |
+| `vsftp_rapid_reconnections_total` | Counter | 快速重连次数（同一IP在30秒内重连） |
+| `vsftp_active_processes` | Gauge | 基于日志条目的活跃vsftpd进程数 |
 
 ## Prometheus 配置
 
@@ -179,7 +233,7 @@ sudo systemctl start vsftp-exporter
 scrape_configs:
   - job_name: 'vsftp-exporter'
     static_configs:
-      - targets: ['localhost:9100']
+      - targets: ['localhost:9101']
     scrape_interval: 30s
     scrape_timeout: 10s
     metrics_path: /metrics
@@ -192,7 +246,7 @@ groups:
   - name: vsftp-alerts
     rules:
       - alert: VsftpdDown
-        expr: ftp_login_success == 0
+        expr: vsftp_login_success == 0
         for: 1m
         labels:
           severity: critical
@@ -247,16 +301,34 @@ groups:
 
 ```promql
 # 服务可用性
-ftp_login_success
+vsftp_login_success
 
 # 每分钟传输文件数
-rate(files_uploaded[1m]) + rate(files_downloaded[1m])
+rate(vsftp_upload_total[1m]) + rate(vsftp_download_total[1m])
 
 # 传输错误率
-rate(vsftp_transfer_errors_total[5m]) / rate(vsftp_transfer_bytes_total[5m])
+rate(vsftp_transfer_errors_total[5m]) / (rate(vsftp_upload_bytes_total[5m]) + rate(vsftp_download_bytes_total[5m]))
 
-# 平均传输速度
+# 平均传输速度 (MB/s)
 vsftp_average_transfer_speed_bytes_per_second / 1024 / 1024
+
+# 活跃用户数
+count(rate(vsftp_user_logins_total[5m]) > 0)
+
+# 客户端连接分布
+topk(10, rate(vsftp_client_connections_total[5m]))
+
+# 上传下载比率
+rate(vsftp_upload_bytes_total[5m]) / rate(vsftp_download_bytes_total[5m])
+
+# 总传输字节数 (上传+下载)
+rate(vsftp_upload_bytes_total[5m]) + rate(vsftp_download_bytes_total[5m])
+
+# 上传流量 (MB/s)
+rate(vsftp_upload_bytes_total[5m]) / 1024 / 1024
+
+# 下载流量 (MB/s)
+rate(vsftp_download_bytes_total[5m]) / 1024 / 1024
 ```
 
 ## 故障排除

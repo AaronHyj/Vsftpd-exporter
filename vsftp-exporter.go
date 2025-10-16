@@ -197,12 +197,19 @@ var (
 
 	// 新增的监控指标
 	
-	// transferBytesTotal 传输字节总数（按方向分类）
-	// 统计上传和下载的总字节数
-	transferBytesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "vsftp_transfer_bytes_total",
-		Help: "Total number of bytes transferred (upload/download).",
-	}, []string{"direction"})
+	// uploadBytesTotal 上传字节总数
+	// 统计上传的总字节数
+	uploadBytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vsftp_upload_bytes_total",
+		Help: "Total number of bytes uploaded.",
+	})
+
+	// downloadBytesTotal 下载字节总数
+	// 统计下载的总字节数
+	downloadBytesTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vsftp_download_bytes_total",
+		Help: "Total number of bytes downloaded.",
+	})
 
 	// transferDurationSeconds 文件传输耗时分布（histogram）
 	// 记录文件传输操作的耗时分布
@@ -340,6 +347,13 @@ var (
 		Name: "vsftp_login_failures_by_client",
 		Help: "Number of login failures by client IP address.",
 	}, []string{"client_ip"})
+
+	// clientFilesTotal 按客户端IP统计上传和下载文件数量
+	// 从xferlog中解析文件传输记录，按客户端IP和传输方向分类统计
+	clientFilesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vsftp_client_files_total",
+		Help: "Total number of files transferred by client IP address and direction.",
+	}, []string{"client_ip", "direction"})
 )
 
 // init 初始化函数，在程序启动时自动执行
@@ -359,7 +373,8 @@ func init() {
 	prometheus.MustRegister(ftpDownloadTotal)    // 下载总次数计数器
 
 	// 注册新增的监控指标
-	prometheus.MustRegister(transferBytesTotal)        // 传输字节总数指标
+	prometheus.MustRegister(uploadBytesTotal)          // 上传字节总数指标
+	prometheus.MustRegister(downloadBytesTotal)        // 下载字节总数指标
 	prometheus.MustRegister(transferDurationSeconds)   // 传输耗时分布指标
 	prometheus.MustRegister(concurrentTransfers)       // 并发传输数指标
 	prometheus.MustRegister(averageTransferSpeed)      // 平均传输速度指标
@@ -381,6 +396,7 @@ func init() {
 	prometheus.MustRegister(activeProcesses)             // 活跃进程数指标
 	prometheus.MustRegister(clientActivityByHour)        // 按小时统计客户端活动指标
 	prometheus.MustRegister(loginFailuresByClient)       // 按客户端IP统计登录失败指标
+	prometheus.MustRegister(clientFilesTotal)            // 按客户端IP统计文件传输数量指标
 }
 
 // main 程序主入口函数
@@ -1240,8 +1256,13 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState) error {
 				ftpUploadTotal.Inc()
 				filesUploaded.Inc() // 更新Gauge指标
 				
+				// 统计按客户端IP的上传文件数量
+				if clientIP != "" {
+					clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+				}
+				
 				if fileSize > 0 {
-					transferBytesTotal.WithLabelValues("upload").Add(float64(fileSize))
+					uploadBytesTotal.Add(float64(fileSize))
 					state.totalBytesUploaded += fileSize
 					totalBytesThisRound += fileSize
 				}
@@ -1261,8 +1282,13 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState) error {
 				ftpDownloadTotal.Inc()
 				filesDownloaded.Inc() // 更新Gauge指标
 				
+				// 统计按客户端IP的下载文件数量
+				if clientIP != "" {
+					clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+				}
+				
 				if fileSize > 0 {
-					transferBytesTotal.WithLabelValues("download").Add(float64(fileSize))
+					downloadBytesTotal.Add(float64(fileSize))
 					state.totalBytesDownloaded += fileSize
 					totalBytesThisRound += fileSize
 				}
