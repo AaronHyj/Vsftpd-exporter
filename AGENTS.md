@@ -1,4 +1,6 @@
 # Repository Guidelines
+##
+Use Chinese 
 
 ## Project Structure & Module Organization
 - `vsftp-exporter.go` contains the exporter entry point plus collectors, SSH helpers, and metric registration; keep new packages close to their domain logic before splitting to subdirectories.

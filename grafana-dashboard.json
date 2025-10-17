@@ -869,7 +869,7 @@
       },
       "targets": [
         {
-          "expr": "increase(vsftp_file_count_by_extension{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "expr": "round(increase(vsftp_file_count_by_extension{job=\"$job\", instance=\"$instance\"}[$__range]))",
           "instant": true,
           "interval": "",
           "legendFormat": "{{extension}}",
