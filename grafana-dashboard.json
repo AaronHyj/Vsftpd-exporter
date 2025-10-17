@@ -791,12 +791,10 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
           "custom": {
-            "align": "auto",
-            "displayMode": "auto",
-            "inspect": false
+            "hideFrom": {}
           },
           "mappings": [],
           "min": 0,
@@ -827,8 +825,12 @@
             },
             "properties": [
               {
-                "id": "custom.hidden",
-                "value": true
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": true,
+                  "tooltip": true,
+                  "viz": true
+                }
               }
             ]
           }
@@ -842,13 +844,28 @@
       },
       "id": 10,
       "options": {
-        "showHeader": true,
-        "sortBy": [
-          {
-            "desc": true,
-            "displayName": "Value"
-          }
-        ]
+        "barWidth": 0.8,
+        "displayMode": "basic",
+        "groupWidth": 0.7,
+        "legend": {
+          "calcs": [],
+          "displayMode": "hidden",
+          "placement": "bottom"
+        },
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "valueOptions": {
+          "showValue": "always"
+        }
       },
       "targets": [
         {
@@ -859,8 +876,38 @@
           "refId": "A"
         }
       ],
+      "transformations": [
+        {
+          "id": "seriesToRows",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Field": true,
+              "Time": true
+            },
+            "renameByName": {
+              "Metric": "扩展名",
+              "Value": "文件数"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "desc": true,
+                "field": "文件数"
+              }
+            ]
+          }
+        }
+      ],
       "title": "按文件扩展名统计 (选定时间范围内增量)",
-      "type": "table"
+      "type": "barchart"
     },
     {
       "datasource": "Prometheus",
