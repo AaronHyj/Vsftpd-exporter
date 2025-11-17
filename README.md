@@ -2,6 +2,24 @@
 
 一个用于监控 vsftpd FTP 服务器的 Prometheus exporter，提供全面的 FTP 服务性能和状态监控指标。
 
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](Dockerfile)
+
+## 🚀 快速开始
+
+```bash
+# 使用 Docker Compose 一键部署
+docker-compose up -d
+
+# 访问服务
+# Grafana: http://localhost:3000 (admin/admin)
+# Prometheus: http://localhost:9090
+# Metrics: http://localhost:9101/metrics
+```
+
+📖 详细步骤请查看 [快速开始指南](QUICKSTART.md)
+
 ## 项目简介
 
 Vsftpd Exporter 是一个专门为 vsftpd FTP 服务器设计的 Prometheus 监控导出器。它通过解析 FTP 日志文件、检查 FTP 连接状态和执行健康检查来收集各种监控指标，帮助运维人员实时监控 FTP 服务的性能和健康状态。
@@ -275,27 +293,48 @@ groups:
 
 ## Grafana 仪表板
 
-### 推荐的仪表板面板
+项目提供了一个完整的 Grafana 仪表板配置文件 `grafana-dashboard.json`，包含以下监控面板：
 
-1. **服务状态概览**
-   - FTP 服务可用性
-   - 当前连接数
-   - 登录成功率
+### 仪表板特性
 
-2. **传输统计**
-   - 上传/下载文件数量趋势
-   - 传输字节数统计
-   - 平均传输速度
+- **14+ 监控面板**: 涵盖服务状态、传输统计、性能分析等
+- **自动刷新**: 默认 30 秒自动更新数据
+- **变量支持**: 支持 Job 和 Instance 变量切换
+- **响应式布局**: 自适应不同屏幕尺寸
+- **中文界面**: 所有面板标题和说明均为中文
 
-3. **性能监控**
-   - 传输耗时分布
-   - 带宽使用率
-   - 并发传输数
+### 面板分组
 
-4. **错误监控**
-   - 登录失败趋势
-   - 传输错误统计
-   - 连接超时次数
+**📊 服务状态概览**
+- FTP 服务状态（在线/离线）
+- 总连接数、活跃连接数
+- 唯一客户端数、并发传输数
+- 活跃进程数
+
+**📈 传输统计**
+- 上传/下载文件总数
+- 登录总次数、最后登录时间
+- 连接状态趋势图
+- 传输速率图 (MB/s)
+
+### 导入仪表板
+
+**方式一：Grafana UI 导入**
+```
+1. 登录 Grafana (http://localhost:3000)
+2. 点击 "+" → "Import"
+3. 上传 grafana-dashboard.json
+4. 选择 Prometheus 数据源
+5. 点击 "Import"
+```
+
+**方式二：使用 Docker Compose**
+```bash
+docker-compose up -d
+# 仪表板会自动配置
+```
+
+详细使用说明请参考 [GRAFANA_DASHBOARD.md](GRAFANA_DASHBOARD.md)
 
 ### 示例查询语句
 

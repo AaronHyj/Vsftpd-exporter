@@ -1,0 +1,124 @@
+groups:
+  - name: vsftp_alerts
+    interval: 30s
+    rules:
+      # FTP 服务不可用告警
+      - alert: VsftpdServiceDown
+        expr: vsftp_login_success == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: vsftpd
+        annotations:
+          summary: "Vsftpd 服务不可用"
+          description: "实例 {{ $labels.instance }} 的 Vsftpd 服务已经宕机超过 2 分钟"
+
+      # 登录失败率过高告警
+      - alert: HighFailedLoginRate
+        expr: rate(vsftp_failed_logins_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "FTP 登录失败率过高"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内登录失败率超过 10 次/分钟"
+
+      # 传输错误率过高告警
+      - alert: HighTransferErrorRate
+        expr: rate(vsftp_transfer_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "FTP 传输错误率过高"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内传输错误率超过 5 次/分钟，错误类型: {{ $labels.type }}"
+
+      # 连接数过高告警
+      - alert: HighConnectionCount
+        expr: vsftp_connections > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "FTP 连接数过高"
+          description: "实例 {{ $labels.instance }} 的连接数为 {{ $value }}，超过阈值 100"
+
+      # CLOSE_WAIT 连接过多告警（可能存在连接泄漏）
+      - alert: HighCloseWaitConnections
+        expr: vsftp_close_wait_connections > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "CLOSE_WAIT 连接数过多"
+          description: "实例 {{ $labels.instance }} 的 CLOSE_WAIT 连接数为 {{ $value }}，可能存在连接泄漏"
+
+      # 连接超时频繁告警
+      - alert: FrequentConnectionTimeouts
+        expr: rate(vsftp_connection_timeouts_total[5m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "连接超时频繁"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内连接超时率超过 3 次/分钟"
+
+      # 认证错误频繁告警
+      - alert: FrequentAuthenticationErrors
+        expr: rate(vsftp_authentication_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "认证错误频繁"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内认证错误率超过 5 次/分钟，可能存在暴力破解攻击"
+
+      # 快速重连异常告警
+      - alert: RapidReconnections
+        expr: rate(vsftp_rapid_reconnections_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: info
+          service: vsftpd
+        annotations:
+          summary: "快速重连异常"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内快速重连率超过 10 次/分钟"
+
+      # 带宽使用率过高告警
+      - alert: HighBandwidthUsage
+        expr: vsftp_bandwidth_usage_bytes_per_second > 100000000  # 100 MB/s
+        for: 5m
+        labels:
+          severity: info
+          service: vsftpd
+        annotations:
+          summary: "带宽使用率过高"
+          description: "实例 {{ $labels.instance }} 的带宽使用率为 {{ $value | humanize }}B/s，超过 100 MB/s"
+
+      # 达到最大连接数限制告警
+      - alert: MaxConnectionsReached
+        expr: rate(vsftp_max_connections_reached_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "达到最大连接数限制"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内多次达到最大连接数限制"
+
+      # Exporter 自身不可用告警
+      - alert: VsftpExporterDown
+        expr: up{job="vsftp-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: vsftpd-exporter
+        annotations:
+          summary: "Vsftpd Exporter 不可用"
+          description: "实例 {{ $labels.instance }} 的 Vsftpd Exporter 已经宕机超过 2 分钟"

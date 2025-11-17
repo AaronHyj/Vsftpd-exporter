@@ -1,0 +1,36 @@
+# Prometheus 配置文件示例
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  scrape_timeout: 10s
+
+# 告警规则文件
+rule_files:
+  # - "alerts.yml"
+
+# 抓取配置
+scrape_configs:
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Vsftpd Exporter 监控
+  - job_name: 'vsftp-exporter'
+    static_configs:
+      - targets: ['vsftp-exporter:9101']
+        labels:
+          service: 'vsftpd'
+          environment: 'production'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+
+  # 如果有多个 FTP 服务器，可以添加多个目标
+  # - job_name: 'vsftp-exporter-dev'
+  #   static_configs:
+  #     - targets: ['dev-server:9101']
+  #       labels:
+  #         service: 'vsftpd'
+  #         environment: 'development'
