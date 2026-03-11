@@ -12,7 +12,7 @@ coverage.txt
 coverage.html
 
 # 配置文件（包含敏感信息）
-config.json
+configs/config.json
 
 # 日志文件
 *.log
@@ -24,6 +24,7 @@ log/*.log
 *.swp
 *.swo
 *~
+.kiro/
 
 # 操作系统文件
 .DS_Store

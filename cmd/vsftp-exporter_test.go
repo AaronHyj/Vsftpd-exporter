@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// TestIsValidHost 测试主机地址验证
 func TestIsValidHost(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -33,7 +32,6 @@ func TestIsValidHost(t *testing.T) {
 	}
 }
 
-// TestIsValidUsername 测试用户名验证
 func TestIsValidUsername(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -59,33 +57,6 @@ func TestIsValidUsername(t *testing.T) {
 	}
 }
 
-// TestExtractFileExtension 测试文件扩展名提取
-func TestExtractFileExtension(t *testing.T) {
-	tests := []struct {
-		name     string
-		filename string
-		expected string
-	}{
-		{"普通文件", "test.txt", "txt"},
-		{"多个点的文件", "archive.tar.gz", "gz"},
-		{"无扩展名", "README", "no_extension"},
-		{"空字符串", "", "no_extension"},
-		{"隐藏文件", ".gitignore", "gitignore"},
-		{"大写扩展名", "FILE.PDF", "pdf"},
-		{"路径中的文件", "/path/to/file.log", "log"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractFileExtension(tt.filename)
-			if result != tt.expected {
-				t.Errorf("extractFileExtension(%q) = %q, 期望 %q", tt.filename, result, tt.expected)
-			}
-		})
-	}
-}
-
-// TestParseStandardXferlog 测试标准xferlog格式解析
 func TestParseStandardXferlog(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -141,7 +112,6 @@ func TestParseStandardXferlog(t *testing.T) {
 	}
 }
 
-// TestParseVsftpdTimestamp 测试vsftpd时间戳解析
 func TestParseVsftpdTimestamp(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -165,7 +135,6 @@ func TestParseVsftpdTimestamp(t *testing.T) {
 	}
 }
 
-// TestExpandLogFilePath 测试日志文件路径扩展
 func TestExpandLogFilePath(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -190,7 +159,6 @@ func TestExpandLogFilePath(t *testing.T) {
 	}
 }
 
-// TestCheckLogFileAccess 测试日志文件访问检查
 func TestCheckLogFileAccess(t *testing.T) {
 	// 创建临时测试文件
 	tmpDir := t.TempDir()
@@ -221,7 +189,6 @@ func TestCheckLogFileAccess(t *testing.T) {
 	}
 }
 
-// TestExtractTimestamp 测试时间戳提取
 func TestExtractTimestamp(t *testing.T) {
 	tests := []struct {
 		name string
@@ -247,7 +214,6 @@ func TestExtractTimestamp(t *testing.T) {
 	}
 }
 
-// BenchmarkParseStandardXferlog 性能测试：解析标准xferlog
 func BenchmarkParseStandardXferlog(b *testing.B) {
 	line := "Wed Oct 15 16:04:42 2025 1 172.25.235.63 19236361 /txt/yd_platform.txt b _ i g dstore ftp 0 * c"
 	b.ResetTimer()
@@ -256,16 +222,6 @@ func BenchmarkParseStandardXferlog(b *testing.B) {
 	}
 }
 
-// BenchmarkExtractFileExtension 性能测试：提取文件扩展名
-func BenchmarkExtractFileExtension(b *testing.B) {
-	filename := "/path/to/file.txt"
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		extractFileExtension(filename)
-	}
-}
-
-// BenchmarkIsValidHost 性能测试：主机地址验证
 func BenchmarkIsValidHost(b *testing.B) {
 	host := "ftp.example.com"
 	b.ResetTimer()

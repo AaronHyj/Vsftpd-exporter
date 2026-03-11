@@ -14,16 +14,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # 复制源代码
-COPY vsftp-exporter.go ./
+COPY cmd/ ./cmd/
 
 # 构建应用
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-extldflags "-static"' -o vsftp-exporter vsftp-exporter.go
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-extldflags "-static"' -o vsftp-exporter ./cmd
 
 # 运行阶段
 FROM alpine:latest
 
 # 安装必要的运行时工具（用于 netstat 命令）
-RUN apk --no-cache add ca-certificates net-tools openssh-client
+RUN apk --no-cache add ca-certificates iproute2 openssh-client
 
 # 创建非 root 用户
 RUN addgroup -g 1000 exporter && \
@@ -36,7 +36,7 @@ WORKDIR /app
 COPY --from=builder /build/vsftp-exporter .
 
 # 复制配置文件模板
-COPY config.example.json ./config.example.json
+COPY configs/config.example.json ./config.example.json
 
 # 修改文件所有者
 RUN chown -R exporter:exporter /app

@@ -14,13 +14,13 @@ all: fmt vet build
 # 构建二进制文件
 build:
 	@echo "正在构建 $(BINARY_NAME)..."
-	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BINARY_NAME) vsftp-exporter.go
+	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BINARY_NAME) ./cmd
 	@echo "构建完成: $(BINARY_NAME)"
 
 # 运行程序
 run: build
 	@echo "启动 $(BINARY_NAME)..."
-	./$(BINARY_NAME) -config=./config.json
+	./$(BINARY_NAME) -config=./configs/config.json
 
 # 运行测试
 test:
@@ -65,15 +65,15 @@ clean:
 # 交叉编译
 build-linux:
 	@echo "构建 Linux 版本..."
-	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY_NAME)-linux-amd64 vsftp-exporter.go
+	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY_NAME)-linux-amd64 ./cmd
 
 build-windows:
 	@echo "构建 Windows 版本..."
-	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY_NAME)-windows-amd64.exe vsftp-exporter.go
+	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY_NAME)-windows-amd64.exe ./cmd
 
 build-darwin:
 	@echo "构建 macOS 版本..."
-	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY_NAME)-darwin-amd64 vsftp-exporter.go
+	GOOS=darwin GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY_NAME)-darwin-amd64 ./cmd
 
 build-all: build-linux build-windows build-darwin
 	@echo "所有平台构建完成"

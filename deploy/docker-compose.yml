@@ -3,15 +3,15 @@ version: '3.8'
 services:
   vsftp-exporter:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: deploy/Dockerfile
     container_name: vsftp-exporter
     restart: unless-stopped
     ports:
       - "9101:9101"
     volumes:
       # 挂载配置文件
-      - ./config.json:/app/config.json:ro
+      - ../configs/config.json:/app/config.json:ro
       # 如果需要访问本地日志文件，取消注释以下行
       # - /var/log/xferlog:/var/log/xferlog:ro
       # - /var/log/vsftpd.log:/var/log/vsftpd.log:ro
@@ -39,7 +39,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
