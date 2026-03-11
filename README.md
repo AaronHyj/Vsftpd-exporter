@@ -4,7 +4,7 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/your-org/vsftpd-exporter/ci.yml?label=CI)](https://github.com/your-org/vsftpd-exporter/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status//SchicksalNvi/Vsftpd-exporter/ci.yml?label=CI)](https://github.com//SchicksalNvi/Vsftpd-exporter/actions)
 
 ## 快速开始
 
@@ -371,12 +371,6 @@ rule_files:
 
 登录 Grafana → 点击 "+" → "Import" → 上传 `deploy/grafana-dashboard.json` → 选择 Prometheus 数据源
 
-### 验证仪表板配置
-
-```bash
-python3 deploy/validate_dashboard.py deploy/grafana-dashboard.json
-```
-
 ### 常用 PromQL 查询
 
 ```promql
@@ -426,7 +420,7 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 │   └── alerts.yml             # Prometheus 告警规则
 ├── deploy/                    # 部署辅助
 │   ├── grafana-dashboard.json # Grafana 仪表板配置
-│   └── validate_dashboard.py  # 仪表板配置验证脚本
+│   └── vsftpd-exporter.service # systemd 服务文件
 ├── .github/workflows/         # GitHub Actions CI/CD
 │   ├── ci.yml                 # 持续集成
 │   └── release.yml            # 发布流程
