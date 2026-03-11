@@ -9,44 +9,6 @@ import (
 	"pgregory.net/rapid"
 )
 
-// Feature: vsftp-exporter-refactor, Property 1: activeTransfers 计数正确性
-// For any 合法的传输事件序列（包含开始和完成事件），ExporterState.activeTransfers
-// 应始终等于"已开始但未完成的传输数量"，且该值永远不低于 0。
-// **Validates: Requirements 1.1, 1.2, 1.3**
-// Feature: vsftp-exporter-refactor, Property 1: activeTransfers 计数正确性
-// For any 合法的传输事件序列（包含开始和完成事件），ExporterState.activeTransfers
-// 应始终等于"已开始但未完成的传输数量"，且该值永远不低于 0。
-// **Validates: Requirements 1.1, 1.2, 1.3**
-func TestPropertyActiveTransfersCount(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		n := rapid.IntRange(1, 100).Draw(t, "eventCount")
-		events := make([]bool, n)
-		for i := range events {
-			events[i] = rapid.Bool().Draw(t, fmt.Sprintf("event_%d", i))
-		}
-
-		active := 0
-		for _, isStart := range events {
-			if isStart {
-				active++
-			} else {
-				if active > 0 {
-					active--
-				}
-			}
-			// Property: activeTransfers must never go below 0
-			if active < 0 {
-				t.Fatalf("activeTransfers went negative: %d", active)
-			}
-		}
-
-		// Property: final value must be non-negative
-		if active < 0 {
-			t.Fatalf("final activeTransfers is negative: %d", active)
-		}
-	})
-}
-
 // Feature: vsftp-exporter-refactor, Property 3: 平均传输速度计算正确性
 // For any 正的总传输字节数和正的程序运行时长，averageTransferSpeed 应等于
 // totalBytes / runDuration。当运行时长为零或负数时，averageTransferSpeed 应为 0。
@@ -84,9 +46,6 @@ func TestPropertyNewExporterStateInit(t *testing.T) {
 		state := NewExporterState()
 		after := time.Now()
 
-		if state.transferStartTimes == nil {
-			t.Fatal("transferStartTimes is nil")
-		}
 		if state.clientLastActivity == nil {
 			t.Fatal("clientLastActivity is nil")
 		}
@@ -105,9 +64,6 @@ func TestPropertyNewExporterStateInit(t *testing.T) {
 
 		if state.lastProcessedTime.Before(before) || state.lastProcessedTime.After(after) {
 			t.Fatalf("lastProcessedTime %v not in [%v, %v]", state.lastProcessedTime, before, after)
-		}
-		if state.lastBandwidthCheck.Before(before) || state.lastBandwidthCheck.After(after) {
-			t.Fatalf("lastBandwidthCheck %v not in [%v, %v]", state.lastBandwidthCheck, before, after)
 		}
 	})
 }
@@ -241,7 +197,7 @@ func TestPropertyParseStandardXferlog(t *testing.T) {
 			direction, username, completionStatus,
 		)
 
-		gotDir, gotIP, gotSize, gotPath, gotTime, gotUser, gotCompleted := parseStandardXferlog(line)
+		gotEventTime, gotDir, gotIP, gotSize, gotPath, gotTime, gotUser, gotCompleted := parseStandardXferlog(line)
 
 		if gotDir != direction {
 			t.Fatalf("direction: got %q, want %q\nline: %s", gotDir, direction, line)
@@ -269,6 +225,13 @@ func TestPropertyParseStandardXferlog(t *testing.T) {
 		}
 		if gotDir != "i" && gotDir != "o" {
 			t.Fatalf("direction must be 'i' or 'o', got %q", gotDir)
+		}
+		// Property: timestamp must be parsed correctly
+		if gotEventTime.IsZero() {
+			t.Fatalf("eventTime is zero for valid xferlog line")
+		}
+		if gotEventTime.Year() != year {
+			t.Fatalf("eventTime year: got %d, want %d", gotEventTime.Year(), year)
 		}
 	})
 }
