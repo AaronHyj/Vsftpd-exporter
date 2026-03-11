@@ -65,7 +65,7 @@ func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([
 		return readLocalFile(filePath, startPosition)
 	}
 
-	slog.Info("通过SSH读取文件", "path", filePath)
+	slog.Debug("通过SSH读取文件", "path", filePath)
 
 	if !isValidFilePath(filePath) {
 		return nil, 0, fmt.Errorf("文件路径包含非法字符: %s", filePath)
@@ -89,7 +89,7 @@ func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([
 	}
 
 	newPosition := startPosition + int64(len(output))
-	slog.Info("SSH读取文件成功", "lines", len(lines), "position", newPosition)
+	slog.Debug("SSH读取文件成功", "lines", len(lines), "position", newPosition)
 	return lines, newPosition, nil
 }
 
@@ -175,7 +175,7 @@ func parseXferlogTimestamp(timeStr string) (time.Time, error) {
 }
 
 func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *SSHManager) error {
-	slog.Info("开始解析FTP日志文件", "path", logPath, "position", state.lastPosition)
+	slog.Debug("开始解析FTP日志文件", "path", logPath, "position", state.lastPosition)
 
 	lines, newPosition, err := readRemoteFile(sshMgr, logPath, state.lastPosition)
 	if err != nil {
@@ -276,7 +276,7 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 
 	state.lastBytesTransferred += totalBytesThisRound
 
-	slog.Info("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount, "incomplete", incompleteCount)
+	slog.Debug("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount, "incomplete", incompleteCount)
 	return nil
 }
 
@@ -285,7 +285,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		return nil
 	}
 
-	slog.Info("开始解析vsftpd日志文件", "path", logPath)
+	slog.Debug("开始解析vsftpd日志文件", "path", logPath)
 
 	lines, newPosition, err := readRemoteFile(sshMgr, logPath, state.vsftpLogPosition)
 	if err != nil {
@@ -424,7 +424,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		state.lastProcessUpdate = currentTime
 	}
 
-	slog.Info("vsftpd日志解析完成",
+	slog.Debug("vsftpd日志解析完成",
 		"lines", linesProcessed,
 		"connects", connectCount,
 		"logins_ok", loginOKCount,
