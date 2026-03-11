@@ -23,16 +23,6 @@ var (
 		Help: "Number of CLOSE_WAIT FTP connections.",
 	})
 
-	filesDownloaded = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "vsftp_files_received_total",
-		Help: "Total number of files received (downloaded) from the FTP server.",
-	})
-
-	filesUploaded = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "vsftp_files_sent_total",
-		Help: "Total number of files sent (uploaded) to the FTP server.",
-	})
-
 	ftpLoginTime = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "vsftp_last_login_time",
 		Help: "Timestamp of last successful FTP login.",
@@ -67,11 +57,6 @@ var (
 		Name:    "vsftp_transfer_duration_seconds",
 		Help:    "Duration of file transfers in seconds.",
 		Buckets: prometheus.ExponentialBuckets(0.1, 2, 10),
-	})
-
-	concurrentTransfers = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "vsftp_concurrent_transfers",
-		Help: "Current number of concurrent file transfers.",
 	})
 
 	averageTransferSpeed = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -145,11 +130,6 @@ var (
 		Help: "Number of active vsftpd processes based on log entries.",
 	})
 
-	loginFailuresByClient = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "vsftp_login_failures_by_client",
-		Help: "Number of login failures by client IP address.",
-	}, []string{"client_ip"})
-
 	clientFilesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "vsftp_client_files_total",
 		Help: "Total number of files transferred by client IP address and direction.",
@@ -162,8 +142,6 @@ func init() {
 		ftpConnections,
 		establishedConnections,
 		closeWaitConnections,
-		filesDownloaded,
-		filesUploaded,
 		ftpLoginTime,
 		ftpLoginTotal,
 		ftpUploadTotal,
@@ -171,7 +149,6 @@ func init() {
 		uploadBytesTotal,
 		downloadBytesTotal,
 		transferDurationSeconds,
-		concurrentTransfers,
 		averageTransferSpeed,
 		failedLoginsTotal,
 		transferErrorsTotal,
@@ -186,7 +163,6 @@ func init() {
 		connectionLoginDelaySeconds,
 		rapidReconnectionsTotal,
 		activeProcesses,
-		loginFailuresByClient,
 		clientFilesTotal,
 	)
 }

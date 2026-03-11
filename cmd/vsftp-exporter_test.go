@@ -94,7 +94,7 @@ func TestParseStandardXferlog(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			direction, clientIP, fileSize, _, _, _, completed := parseStandardXferlog(tt.line)
+			_, direction, clientIP, fileSize, _, _, _, completed := parseStandardXferlog(tt.line)
 
 			if direction != tt.expectedDirection {
 				t.Errorf("方向 = %q, 期望 %q", direction, tt.expectedDirection)
