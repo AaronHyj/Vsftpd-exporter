@@ -78,12 +78,24 @@ func checkFTPLogin(config *Config, state *ExporterState) error {
 }
 
 func main() {
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		AddSource: true,
-	})))
-
 	configFile := flag.String("config", "configs/config.json", "配置文件路径")
+	logLevel := flag.String("log-level", "info", "日志级别 (debug/info/warn/error)")
 	flag.Parse()
+
+	var level slog.Level
+	switch strings.ToLower(*logLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: level,
+	})))
 
 	slog.Info("正在加载配置文件", "path", *configFile)
 	config, err := loadAndValidateConfig(*configFile)

@@ -126,17 +126,40 @@ func loadAndValidateConfig(file string) (*Config, error) {
 	}
 
 	if config.LogFilePath != "" {
-		expandedPath, err := expandLogFilePath(config.LogFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("日志文件路径处理失败: %w", err)
+		if !isValidFilePath(config.LogFilePath) {
+			return nil, fmt.Errorf("日志文件路径包含非法字符: %s", config.LogFilePath)
 		}
-		config.LogFilePath = expandedPath
+		// SSH 模式下文件在远程服务器，不检查本地是否存在
+		if !config.NeedSSH {
+			expandedPath, err := expandLogFilePath(config.LogFilePath)
+			if err != nil {
+				return nil, fmt.Errorf("日志文件路径处理失败: %w", err)
+			}
+			config.LogFilePath = expandedPath
 
-		if err := checkLogFileAccess(config.LogFilePath); err != nil {
-			return nil, fmt.Errorf("日志文件路径验证失败: %w", err)
+			if err := checkLogFileAccess(config.LogFilePath); err != nil {
+				return nil, fmt.Errorf("日志文件路径验证失败: %w", err)
+			}
 		}
 	} else {
 		slog.Warn("未配置日志文件路径，将无法解析FTP传输日志")
+	}
+
+	if config.VsftplogEnabled && config.VsftplogFilePath != "" {
+		if !isValidFilePath(config.VsftplogFilePath) {
+			return nil, fmt.Errorf("vsftpd日志文件路径包含非法字符: %s", config.VsftplogFilePath)
+		}
+		if !config.NeedSSH {
+			expandedPath, err := expandLogFilePath(config.VsftplogFilePath)
+			if err != nil {
+				return nil, fmt.Errorf("vsftpd日志文件路径处理失败: %w", err)
+			}
+			config.VsftplogFilePath = expandedPath
+
+			if err := checkLogFileAccess(config.VsftplogFilePath); err != nil {
+				return nil, fmt.Errorf("vsftpd日志文件路径验证失败: %w", err)
+			}
+		}
 	}
 
 	return &config, nil
