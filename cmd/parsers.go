@@ -11,13 +11,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	connectRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+CONNECT:\s+Client\s+"([^"]+)"`)
-	loginRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+LOGIN:\s+Client\s+"([^"]+)"`)
+	connectRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+CONNECT:\s+Client\s+"([^"]+)"`)
+	loginOKRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+LOGIN:\s+Client\s+"([^"]+)"`)
+	loginFailRegex  = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
+	uploadOKRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+UPLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
+	downloadOKRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+DOWNLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
+	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\].*FTP\s+response:.*"530\s+`)
 
 	timestampRegexYMD     = regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`)
 	timestampRegexSyslog  = regexp.MustCompile(`(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})`)
@@ -32,10 +34,7 @@ type ExporterState struct {
 
 	totalBytesUploaded   int64
 	totalBytesDownloaded int64
-	lastBandwidthCheck   time.Time
 	lastBytesTransferred int64
-	activeTransfers      int
-	transferStartTimes   map[string]time.Time
 
 	vsftpLogPosition int64
 
@@ -53,8 +52,6 @@ func NewExporterState() *ExporterState {
 	now := time.Now()
 	return &ExporterState{
 		lastProcessedTime:  now,
-		lastBandwidthCheck: now,
-		transferStartTimes: make(map[string]time.Time),
 		clientLastActivity: make(map[string]time.Time),
 		clientConnectTimes: make(map[string]time.Time),
 		userClientMapping:  make(map[string]string),
@@ -133,11 +130,15 @@ func readLocalFile(filePath string, startPosition int64) ([]string, int64, error
 	return lines, newPosition, nil
 }
 
-func parseStandardXferlog(line string) (direction string, clientIP string, fileSize int64, filePath string, transferTime int, username string, completed bool) {
+func parseStandardXferlog(line string) (eventTime time.Time, direction string, clientIP string, fileSize int64, filePath string, transferTime int, username string, completed bool) {
 	fields := strings.Fields(line)
 	if len(fields) < 18 {
-		return "", "", 0, "", 0, "", false
+		return time.Time{}, "", "", 0, "", 0, "", false
 	}
+
+	// fields[0..4]: "Wed Oct 15 16:04:42 2025"
+	timeStr := fields[0] + " " + fields[1] + " " + fields[2] + " " + fields[3] + " " + fields[4]
+	eventTime, _ = parseXferlogTimestamp(timeStr)
 
 	transferTimeStr := fields[5]
 	clientIP = fields[6]
@@ -155,7 +156,22 @@ func parseStandardXferlog(line string) (direction string, clientIP string, fileS
 	}
 	completed = (completionStatus == "c")
 
-	return direction, clientIP, fileSize, filePath, transferTime, username, completed
+	return eventTime, direction, clientIP, fileSize, filePath, transferTime, username, completed
+}
+
+// parseXferlogTimestamp 解析 xferlog 时间戳格式: "Wed Oct 15 16:04:42 2025"
+func parseXferlogTimestamp(timeStr string) (time.Time, error) {
+	layouts := []string{
+		"Mon Jan _2 15:04:05 2006",
+		"Mon Jan 02 15:04:05 2006",
+		"Mon Jan 2 15:04:05 2006",
+	}
+	for _, layout := range layouts {
+		if t, err := time.ParseInLocation(layout, timeStr, time.Local); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("无法解析xferlog时间戳: %s", timeStr)
 }
 
 func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *SSHManager) error {
@@ -167,13 +183,13 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 	}
 
 	linesProcessed := 0
-	loginCount := 0
 	uploadCount := 0
 	downloadCount := 0
+	incompleteCount := 0
 	const maxLinesPerRead = 1000
 
-	currentTime := time.Now()
 	totalBytesThisRound := int64(0)
+	var earliestTime, latestTime time.Time
 
 	for _, line := range lines {
 		if linesProcessed >= maxLinesPerRead {
@@ -187,114 +203,80 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 
 		linesProcessed++
 
-		direction, clientIP, fileSize, _, transferTime, username, completed := parseStandardXferlog(line)
-
-		if direction != "" {
-			state.activeTransfers++
-		}
-
-		if direction != "" && completed {
-			if state.activeTransfers > 0 {
-				state.activeTransfers--
-			}
-			if clientIP != "" {
-				clientConnectionsTotal.WithLabelValues(clientIP).Inc()
-			}
-			if username != "" {
-				userConnectionsTotal.WithLabelValues(username).Inc()
-			}
-
-			var dirTotal, dirFiles prometheus.Counter
-			var dirBytesTotal prometheus.Counter
-			var dirBytesState *int64
-			var dirCount *int
-			var dirLabel string
-
-			if direction == "i" {
-				dirTotal, dirFiles = ftpUploadTotal, filesUploaded
-				dirBytesTotal = uploadBytesTotal
-				dirBytesState = &state.totalBytesUploaded
-				dirCount = &uploadCount
-				dirLabel = "upload"
-			} else {
-				dirTotal, dirFiles = ftpDownloadTotal, filesDownloaded
-				dirBytesTotal = downloadBytesTotal
-				dirBytesState = &state.totalBytesDownloaded
-				dirCount = &downloadCount
-				dirLabel = "download"
-			}
-
-			*dirCount++
-			dirTotal.Inc()
-			dirFiles.Inc()
-			if clientIP != "" {
-				clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
-			}
-			if fileSize > 0 {
-				dirBytesTotal.Add(float64(fileSize))
-				*dirBytesState += fileSize
-				totalBytesThisRound += fileSize
-			}
-			if transferTime > 0 {
-				transferDurationSeconds.Observe(float64(transferTime))
-			}
-		}
-
+		eventTime, direction, clientIP, fileSize, _, transferTime, username, completed := parseStandardXferlog(line)
 		if direction == "" {
-			if strings.Contains(line, "OK LOGIN") {
-				loginCount++
-				if timestamp := extractTimestamp(line); timestamp > 0 {
-					ftpLoginTime.Set(float64(timestamp))
-				} else {
-					ftpLoginTime.Set(float64(time.Now().Unix()))
-				}
-				ftpLoginTotal.Inc()
+			continue
+		}
+
+		// 记录本轮日志的时间范围
+		if !eventTime.IsZero() {
+			if earliestTime.IsZero() || eventTime.Before(earliestTime) {
+				earliestTime = eventTime
 			}
-			if strings.Contains(line, "FAIL LOGIN") || strings.Contains(line, "530") {
-				failedLoginsTotal.Inc()
-				if strings.Contains(line, "530") {
-					authenticationErrorsTotal.Inc()
-				}
+			if latestTime.IsZero() || eventTime.After(latestTime) {
+				latestTime = eventTime
 			}
-			if strings.Contains(line, "FAIL UPLOAD") {
+		}
+
+		if !completed {
+			incompleteCount++
+			if direction == "i" {
 				transferErrorsTotal.WithLabelValues("upload").Inc()
-			} else if strings.Contains(line, "FAIL DOWNLOAD") {
+			} else {
 				transferErrorsTotal.WithLabelValues("download").Inc()
-			} else if strings.Contains(line, "timeout") || strings.Contains(line, "TIMEOUT") {
-				transferErrorsTotal.WithLabelValues("timeout").Inc()
-				connectionTimeoutsTotal.Inc()
 			}
-			if strings.Contains(line, "max connections") || strings.Contains(line, "connection limit") {
-				maxConnectionsReachedTotal.Inc()
-			}
+			continue
+		}
+
+		// 按方向更新指标
+		var dirLabel string
+		if direction == "i" {
+			uploadCount++
+			ftpUploadTotal.Inc()
+			uploadBytesTotal.Add(float64(fileSize))
+			state.totalBytesUploaded += fileSize
+			dirLabel = "upload"
+		} else {
+			downloadCount++
+			ftpDownloadTotal.Inc()
+			downloadBytesTotal.Add(float64(fileSize))
+			state.totalBytesDownloaded += fileSize
+			dirLabel = "download"
+		}
+
+		totalBytesThisRound += fileSize
+
+		if clientIP != "" {
+			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
+		}
+		if username != "" {
+			userConnectionsTotal.WithLabelValues(username).Inc()
+		}
+		if transferTime > 0 {
+			transferDurationSeconds.Observe(float64(transferTime))
 		}
 	}
 
 	state.lastPosition = newPosition
-	concurrentTransfers.Set(float64(state.activeTransfers))
 
-	if !state.lastBandwidthCheck.IsZero() {
-		timeDiff := currentTime.Sub(state.lastBandwidthCheck).Seconds()
-		if timeDiff > 0 {
-			currentBandwidthRate := float64(totalBytesThisRound) / timeDiff
-			bandwidthUsage.Set(currentBandwidthRate)
-
-			totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
-			programRunTime := currentTime.Sub(state.lastProcessedTime).Seconds()
-			if totalBytes > 0 && programRunTime > 0 {
-				averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
-			} else {
-				averageTransferSpeed.Set(0)
-			}
+	// 带宽计算：基于日志时间范围
+	if !earliestTime.IsZero() && !latestTime.IsZero() {
+		logTimeDiff := latestTime.Sub(earliestTime).Seconds()
+		if logTimeDiff > 0 {
+			bandwidthUsage.Set(float64(totalBytesThisRound) / logTimeDiff)
 		}
-	} else {
-		state.lastBandwidthCheck = currentTime
 	}
 
-	state.lastBandwidthCheck = currentTime
+	// 平均传输速度：基于程序运行以来的总量
+	totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
+	programRunTime := time.Since(state.lastProcessedTime).Seconds()
+	if totalBytes > 0 && programRunTime > 0 {
+		averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
+	}
+
 	state.lastBytesTransferred += totalBytesThisRound
 
-	slog.Info("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount)
+	slog.Info("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount, "incomplete", incompleteCount)
 	return nil
 }
 
@@ -314,7 +296,8 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 
 	linesProcessed := 0
 	connectCount := 0
-	loginCount := 0
+	loginOKCount := 0
+	loginFailCount := 0
 	currentTime := time.Now()
 
 	for _, line := range lines {
@@ -325,16 +308,14 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 
 		linesProcessed++
 
+		// CONNECT 事件
 		if matches := connectRegex.FindStringSubmatch(line); matches != nil {
-			timeStr := matches[1]
-			processID := matches[2]
-			clientIP := matches[3]
-
-			eventTime, err := parseVsftpdTimestamp(timeStr)
+			eventTime, err := parseVsftpdTimestamp(matches[1])
 			if err != nil {
-				slog.Warn("解析时间戳失败", "timestamp", timeStr, "error", err)
 				continue
 			}
+			processID := matches[2]
+			clientIP := matches[3]
 
 			clientConnectionsTotal.WithLabelValues(clientIP).Inc()
 			connectCount++
@@ -349,24 +330,23 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				}
 			}
 			state.clientLastConnect[clientIP] = eventTime
+			continue
 		}
 
-		if matches := loginRegex.FindStringSubmatch(line); matches != nil {
-			timeStr := matches[1]
+		// OK LOGIN 事件
+		if matches := loginOKRegex.FindStringSubmatch(line); matches != nil {
+			eventTime, err := parseVsftpdTimestamp(matches[1])
+			if err != nil {
+				continue
+			}
 			processID := matches[2]
 			username := matches[3]
 			clientIP := matches[4]
 
-			eventTime, err := parseVsftpdTimestamp(timeStr)
-			if err != nil {
-				slog.Warn("解析时间戳失败", "timestamp", timeStr, "error", err)
-				continue
-			}
-
 			userLoginsTotal.WithLabelValues(username).Inc()
 			userConnectionsTotal.WithLabelValues(username).Inc()
 			ftpLoginTotal.Inc()
-			loginCount++
+			loginOKCount++
 
 			ftpLoginTime.Set(float64(eventTime.Unix()))
 
@@ -380,6 +360,57 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 					connectionLoginDelaySeconds.Observe(delay)
 				}
 			}
+			continue
+		}
+
+		// FAIL LOGIN 事件
+		if matches := loginFailRegex.FindStringSubmatch(line); matches != nil {
+			eventTime, err := parseVsftpdTimestamp(matches[1])
+			if err != nil {
+				continue
+			}
+			clientIP := matches[4]
+
+			failedLoginsTotal.Inc()
+			authenticationErrorsTotal.Inc()
+			loginFailCount++
+
+			state.clientLastActivity[clientIP] = eventTime
+			continue
+		}
+
+		// OK UPLOAD 事件
+		if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
+			clientIP := matches[4]
+			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
+				ftpUploadTotal.Inc()
+				uploadBytesTotal.Add(float64(bytes))
+				state.totalBytesUploaded += bytes
+				if clientIP != "" {
+					clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+				}
+			}
+			continue
+		}
+
+		// OK DOWNLOAD 事件
+		if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
+			clientIP := matches[4]
+			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
+				ftpDownloadTotal.Inc()
+				downloadBytesTotal.Add(float64(bytes))
+				state.totalBytesDownloaded += bytes
+				if clientIP != "" {
+					clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+				}
+			}
+			continue
+		}
+
+		// 530 认证错误响应
+		if ftpResponseRegex.MatchString(line) {
+			authenticationErrorsTotal.Inc()
+			continue
 		}
 	}
 
@@ -393,7 +424,12 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		state.lastProcessUpdate = currentTime
 	}
 
-	slog.Info("vsftpd日志解析完成", "lines", linesProcessed, "connects", connectCount, "logins", loginCount)
+	slog.Info("vsftpd日志解析完成",
+		"lines", linesProcessed,
+		"connects", connectCount,
+		"logins_ok", loginOKCount,
+		"logins_fail", loginFailCount,
+	)
 	return nil
 }
 
