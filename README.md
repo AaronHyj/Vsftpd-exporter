@@ -28,10 +28,10 @@ cp configs/config.example.json configs/config.json
 Vsftpd Exporter 通过以下方式采集监控数据：
 
 1. **FTP 连接探测** — 定期尝试登录 FTP 服务器，验证服务可用性
-2. **netstat 连接统计** — 通过 `netstat -anp` 统计 FTP 端口的连接状态（ESTABLISHED / CLOSE_WAIT 等）
+2. **连接状态统计** — 通过 `ss -tnH` 统计 FTP 端口的连接状态（ESTABLISHED / CLOSE_WAIT 等）
 3. **xferlog 日志解析** — 增量读取标准 xferlog，提取上传/下载文件数、字节数、传输耗时、客户端 IP 等
 4. **vsftpd.log 日志解析** — 增量读取 vsftpd 详细日志，提取 CONNECT/LOGIN 事件、用户活动、进程信息等
-5. **SSH 远程采集** — 支持通过 SSH 连接到远程服务器读取日志和执行 netstat
+5. **SSH 远程采集** — 支持通过 SSH 连接到远程服务器读取日志和执行 ss
 
 所有采集任务按 `check_interval` 配置的间隔周期性执行。
 
@@ -52,7 +52,7 @@ Vsftpd Exporter 通过以下方式采集监控数据：
 │                  vsftp-exporter                      │
 │                                                      │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
-│  │ FTP Login    │  │ netstat      │  │ Log Parser │ │
+│  │ FTP Login    │  │ ss           │  │ Log Parser │ │
 │  │ Checker      │  │ Checker      │  │ (xferlog + │ │
 │  │              │  │              │  │ vsftpd.log)│ │
 │  └──────┬───────┘  └──────┬───────┘  └─────┬──────┘ │
@@ -84,7 +84,6 @@ Vsftpd Exporter 通过以下方式采集监控数据：
 - Go 1.24 或更高版本
 - 运行中的 vsftpd FTP 服务器
 - 对 FTP 日志文件的读取权限（本地模式）或 SSH 访问权限（远程模式）
-- `net-tools` 包（提供 `netstat` 命令）
 
 ### 编译安装
 
@@ -189,6 +188,9 @@ cp configs/config.example.json configs/config.json
 
 # 指定配置文件路径
 ./vsftp-exporter -config=/path/to/config.json
+
+# 指定日志级别 (debug/info/warn/error，默认 info)
+./vsftp-exporter -log-level=debug
 ```
 
 ### 验证运行状态
@@ -230,7 +232,7 @@ curl http://localhost:9101/health
 }
 ```
 
-SSH 模式下，exporter 会通过 SSH 执行 `netstat -anp`、`cat` 和 `dd` 命令来采集数据。SSH 用户需要有读取日志文件和执行 netstat 的权限。
+SSH 模式下，exporter 会通过 SSH 执行 `ss -tnH`、`cat` 和 `dd` 命令来采集数据。SSH 用户需要有读取日志文件和执行 ss 的权限。
 
 ### systemd 服务
 
@@ -244,7 +246,7 @@ After=network.target
 [Service]
 Type=simple
 User=prometheus
-ExecStart=/usr/local/bin/vsftp-exporter -config=/etc/vsftp-exporter/config.json
+ExecStart=/usr/local/bin/vsftp-exporter -config=/etc/vsftp-exporter/config.json -log-level=info
 Restart=always
 RestartSec=5
 
@@ -267,14 +269,11 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_connections` | Gauge | 当前 FTP 端口总连接数 |
 | `vsftp_established_connections` | Gauge | ESTABLISHED 状态连接数 |
 | `vsftp_close_wait_connections` | Gauge | CLOSE_WAIT 状态连接数 |
-| `vsftp_concurrent_transfers` | Gauge | 当前并发传输数 |
 
 ### 传输统计指标
 
 | 指标名称 | 类型 | 说明 |
 | -------- | ---- | ---- |
-| `vsftp_files_received_total` | Gauge | 下载文件总数（从 xferlog 解析） |
-| `vsftp_files_sent_total` | Gauge | 上传文件总数（从 xferlog 解析） |
 | `vsftp_login_total` | Counter | FTP 登录总次数 |
 | `vsftp_upload_total` | Counter | 上传操作总次数 |
 | `vsftp_download_total` | Counter | 下载操作总次数 |
@@ -303,7 +302,6 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_unique_clients` | Gauge | - | 最近 5 分钟内活跃的唯一客户端数 |
 | `vsftp_user_logins_total` | Counter | `username` | 按用户名统计的成功登录总数 |
 | `vsftp_user_connections_total` | Counter | `username` | 按用户名统计的连接总数 |
-| `vsftp_login_failures_by_client` | Counter | `client_ip` | 按客户端 IP 统计的登录失败次数 |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数 |
 
 ### 高级监控指标（需启用 vsftpd.log）
@@ -360,7 +358,7 @@ rule_files:
 
 `deploy/grafana-dashboard.json` 提供了预配置的仪表板，包含以下面板：
 
-- 服务状态概览：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、并发传输数、活跃进程数
+- 服务状态概览：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、活跃进程数
 - 传输统计：上传/下载文件总数、登录总次数、最后登录时间、连接状态趋势图、传输速率图 (MB/s)
 
 仪表板特性：
@@ -474,7 +472,15 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 
 ### 日志级别
 
-程序使用结构化日志，级别包括：`[INFO]`、`[WARN]`、`[ERROR]`、`[DEBUG]`
+通过 `-log-level` 参数控制日志输出级别，默认 `info`。可选值：`debug`、`info`、`warn`、`error`。
+
+```bash
+# 调试模式，输出所有日志（含每轮解析详情）
+./vsftp-exporter -log-level=debug
+
+# 只输出警告和错误
+./vsftp-exporter -log-level=warn
+```
 
 ## 性能说明
 
