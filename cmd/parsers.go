@@ -14,11 +14,11 @@ import (
 )
 
 var (
-	connectRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+CONNECT:\s+Client\s+"([^"]+)"`)
-	loginOKRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+LOGIN:\s+Client\s+"([^"]+)"`)
-	loginFailRegex  = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
-	uploadOKRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+UPLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
-	downloadOKRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+DOWNLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
+	connectRegex     = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+CONNECT:\s+Client\s+"([^"]+)"`)
+	loginOKRegex     = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+LOGIN:\s+Client\s+"([^"]+)"`)
+	loginFailRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
+	uploadOKRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+UPLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
+	downloadOKRegex  = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+DOWNLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
 	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\].*FTP\s+response:.*"530\s+`)
 
 	timestampRegexYMD     = regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`)
