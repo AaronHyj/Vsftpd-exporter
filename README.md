@@ -4,18 +4,21 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](Dockerfile)
 [![CI](https://img.shields.io/github/actions/workflow/status/your-org/vsftpd-exporter/ci.yml?label=CI)](https://github.com/your-org/vsftpd-exporter/actions)
 
 ## 快速开始
 
 ```bash
-# 使用 Docker Compose 一键部署（含 Prometheus + Grafana）
-docker-compose up -d
+# 编译
+make build
+
+# 复制并修改配置
+cp configs/config.example.json configs/config.json
+
+# 运行
+./vsftp-exporter
 
 # 访问服务
-# Grafana:     http://localhost:3000 (admin/admin)
-# Prometheus:  http://localhost:9090
 # Metrics:     http://localhost:9101/metrics
 # Health:      http://localhost:9101/health
 ```
@@ -37,15 +40,14 @@ Vsftpd Exporter 通过以下方式采集监控数据：
 - **连接监控**: 实时统计 FTP 总连接数、ESTABLISHED 连接数、CLOSE_WAIT 连接数
 - **传输统计**: 上传/下载文件数、字节数、传输耗时分布（Histogram）、平均传输速度、带宽使用率
 - **错误监控**: 登录失败、传输错误（按类型分类）、连接超时、认证错误、最大连接数限制
-- **用户与客户端分析**: 按用户名统计登录/连接数，按客户端 IP 统计连接/文件传输数，按小时统计活动
+- **用户与客户端分析**: 按用户名统计登录/连接数，按客户端 IP 统计连接/文件传输数
 - **高级检测**: 快速重连检测（30 秒内同 IP 重连）、连接到登录延迟分布、活跃进程数
-- **文件类型统计**: 按文件扩展名统计传输文件数量
 - **SSH 远程监控**: 通过 SSH 连接远程服务器读取日志文件和执行命令
 - **健康检查**: 提供 `/health` 端点，返回 JSON 格式的服务状态信息
 
 ## 架构概览
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                  vsftp-exporter                      │
 │                                                      │
@@ -96,9 +98,6 @@ go mod download
 
 # 编译
 make build
-
-# 或者直接运行
-go run vsftp-exporter.go
 ```
 
 ### 交叉编译
@@ -113,7 +112,7 @@ make build-all       # 所有平台
 ### Make 目标
 
 | 命令 | 说明 |
-|------|------|
+| ---- | ---- |
 | `make build` | 构建二进制文件 |
 | `make run` | 构建并运行程序 |
 | `make test` | 运行测试（含 race 检测和覆盖率） |
@@ -127,7 +126,7 @@ make build-all       # 所有平台
 ### 依赖包
 
 | 包 | 版本 | 用途 |
-|----|------|------|
+| -- | ---- | ---- |
 | `github.com/jlaffaye/ftp` | v0.2.0 | FTP 客户端，用于连接探测 |
 | `github.com/prometheus/client_golang` | v1.19.1 | Prometheus 客户端库 |
 | `golang.org/x/crypto` | v0.43.0 | SSH 客户端，用于远程采集 |
@@ -163,7 +162,7 @@ cp configs/config.example.json configs/config.json
 ### 配置项详解
 
 | 配置项 | 类型 | 必需 | 默认值 | 说明 |
-|--------|------|------|--------|------|
+| ------ | ---- | ---- | ------ | ---- |
 | `target_host` | string | 是 | - | 目标服务器地址，支持 IP 或域名（会验证格式） |
 | `ftp_port` | string | 否 | `21` | FTP 端口号（1-65535） |
 | `ftp_user` | string | 是 | - | FTP 用户名（最长 64 字符，仅字母数字下划线连字符） |
@@ -203,6 +202,7 @@ curl http://localhost:9101/health
 ```
 
 健康检查返回示例：
+
 ```json
 {
   "status": "healthy",
@@ -257,50 +257,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now vsftp-exporter
 ```
 
-## Docker 部署
-
-### Dockerfile 特性
-
-- 多阶段构建（golang:1.24-alpine → alpine:latest）
-- 静态编译，无 CGO 依赖
-- 非 root 用户运行（uid=1000）
-- 内置健康检查（`/health` 端点）
-- 包含 `net-tools`（netstat）和 `openssh-client`
-
-### Docker Compose
-
-`docker-compose.yml` 包含三个服务：
-
-| 服务 | 端口 | 说明 |
-|------|------|------|
-| `vsftp-exporter` | 9101 | Exporter 本体 |
-| `prometheus` | 9090 | Prometheus 时序数据库 |
-| `grafana` | 3000 | Grafana 可视化面板 |
-
-```bash
-# 启动所有服务
-docker-compose up -d
-
-# 仅启动 exporter
-docker-compose up -d vsftp-exporter
-
-# 查看日志
-docker-compose logs -f vsftp-exporter
-```
-
-如需挂载本地日志文件，取消 `docker-compose.yml` 中的注释：
-```yaml
-volumes:
-  - /var/log/xferlog:/var/log/xferlog:ro
-  - /var/log/vsftpd.log:/var/log/vsftpd.log:ro
-```
-
 ## 监控指标
 
 ### 连接状态指标
 
 | 指标名称 | 类型 | 说明 |
-|----------|------|------|
+| -------- | ---- | ---- |
 | `vsftp_login_success` | Gauge | FTP 登录探测状态（1=成功, 0=失败） |
 | `vsftp_connections` | Gauge | 当前 FTP 端口总连接数 |
 | `vsftp_established_connections` | Gauge | ESTABLISHED 状态连接数 |
@@ -310,7 +272,7 @@ volumes:
 ### 传输统计指标
 
 | 指标名称 | 类型 | 说明 |
-|----------|------|------|
+| -------- | ---- | ---- |
 | `vsftp_files_received_total` | Gauge | 下载文件总数（从 xferlog 解析） |
 | `vsftp_files_sent_total` | Gauge | 上传文件总数（从 xferlog 解析） |
 | `vsftp_login_total` | Counter | FTP 登录总次数 |
@@ -326,42 +288,35 @@ volumes:
 ### 错误和异常指标
 
 | 指标名称 | 类型 | 标签 | 说明 |
-|----------|------|------|------|
+| -------- | ---- | ---- | ---- |
 | `vsftp_failed_logins_total` | Counter | - | 登录失败总次数 |
 | `vsftp_transfer_errors_total` | Counter | `type` | 传输错误总数（upload/download/timeout） |
 | `vsftp_connection_timeouts_total` | Counter | - | 连接超时总次数 |
 | `vsftp_authentication_errors_total` | Counter | - | 认证错误总次数（530 错误） |
 | `vsftp_max_connections_reached_total` | Counter | - | 达到最大连接数限制次数 |
 
-### 文件统计指标
-
-| 指标名称 | 类型 | 标签 | 说明 |
-|----------|------|------|------|
-| `vsftp_file_count_by_extension` | Counter | `extension` | 按文件扩展名统计的传输文件数 |
-
 ### 客户端和用户统计指标（需启用 vsftpd.log）
 
 | 指标名称 | 类型 | 标签 | 说明 |
-|----------|------|------|------|
+| -------- | ---- | ---- | ---- |
 | `vsftp_client_connections_total` | Counter | `client_ip` | 按客户端 IP 统计的连接总数 |
 | `vsftp_unique_clients` | Gauge | - | 最近 5 分钟内活跃的唯一客户端数 |
 | `vsftp_user_logins_total` | Counter | `username` | 按用户名统计的成功登录总数 |
 | `vsftp_user_connections_total` | Counter | `username` | 按用户名统计的连接总数 |
 | `vsftp_login_failures_by_client` | Counter | `client_ip` | 按客户端 IP 统计的登录失败次数 |
-| `vsftp_client_activity_by_hour` | Counter | `hour` | 按小时统计的客户端连接活动 |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数 |
 
 ### 高级监控指标（需启用 vsftpd.log）
 
 | 指标名称 | 类型 | 说明 |
-|----------|------|------|
+| -------- | ---- | ---- |
 | `vsftp_connection_login_delay_seconds` | Histogram | CONNECT 到 LOGIN 的延迟分布（桶: 1ms~16s） |
 | `vsftp_rapid_reconnections_total` | Counter | 快速重连次数（同一 IP 30 秒内重连） |
 | `vsftp_active_processes` | Gauge | 最近 5 分钟内活跃的 vsftpd 进程数 |
 
 ## Prometheus 配置
 
-项目提供了 `prometheus.yml` 配置文件，可直接用于 Docker Compose 部署。手动配置时添加：
+`configs/prometheus.yml` 提供了抓取配置模板。手动配置时添加：
 
 ```yaml
 scrape_configs:
@@ -378,10 +333,10 @@ scrape_configs:
 
 ### 告警规则
 
-项目提供了 `alerts.yml` 告警规则文件，包含以下告警：
+`configs/alerts.yml` 包含以下告警：
 
 | 告警名称 | 严重级别 | 触发条件 |
-|----------|----------|----------|
+| -------- | -------- | -------- |
 | VsftpdServiceDown | critical | FTP 服务不可用超过 2 分钟 |
 | HighFailedLoginRate | warning | 5 分钟内登录失败率 > 10 次/分钟 |
 | HighTransferErrorRate | warning | 5 分钟内传输错误率 > 5 次/分钟 |
@@ -394,7 +349,8 @@ scrape_configs:
 | MaxConnectionsReached | warning | 达到最大连接数限制 |
 | VsftpExporterDown | critical | Exporter 自身不可用超过 2 分钟 |
 
-启用告警规则：取消 `prometheus.yml` 中 `rule_files` 的注释：
+启用告警规则：在 `prometheus.yml` 中取消 `rule_files` 的注释：
+
 ```yaml
 rule_files:
   - "alerts.yml"
@@ -402,34 +358,25 @@ rule_files:
 
 ## Grafana 仪表板
 
-项目提供了 `grafana-dashboard.json` 仪表板配置，包含以下面板：
+`deploy/grafana-dashboard.json` 提供了预配置的仪表板，包含以下面板：
 
-**服务状态概览行**：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、并发传输数、活跃进程数
-
-**传输统计行**：上传/下载文件总数、登录总次数、最后登录时间、连接状态趋势图、传输速率图 (MB/s)
+- 服务状态概览：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、并发传输数、活跃进程数
+- 传输统计：上传/下载文件总数、登录总次数、最后登录时间、连接状态趋势图、传输速率图 (MB/s)
 
 仪表板特性：
+
 - 支持 `job` 和 `instance` 变量切换
 - 默认 30 秒自动刷新
 - 中文面板标题
 
 ### 导入方式
 
-**方式一：Grafana UI**
-1. 登录 Grafana → 点击 "+" → "Import"
-2. 上传 `grafana-dashboard.json`
-3. 选择 Prometheus 数据源
-
-**方式二：Docker Compose 自动配置**
-```bash
-docker-compose up -d
-# 仪表板文件已挂载到 Grafana provisioning 目录
-```
+登录 Grafana → 点击 "+" → "Import" → 上传 `deploy/grafana-dashboard.json` → 选择 Prometheus 数据源
 
 ### 验证仪表板配置
 
 ```bash
-python3 validate_dashboard.py grafana-dashboard.json
+python3 deploy/validate_dashboard.py deploy/grafana-dashboard.json
 ```
 
 ### 常用 PromQL 查询
@@ -464,7 +411,7 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 
 ## 项目结构
 
-```
+```text
 .
 ├── cmd/                       # Go 源码
 │   ├── main.go                # 程序入口、HTTP 服务、信号处理
@@ -479,9 +426,7 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 │   ├── config.json            # 实际配置文件（.gitignore 排除）
 │   ├── prometheus.yml         # Prometheus 抓取配置
 │   └── alerts.yml             # Prometheus 告警规则
-├── deploy/                    # 部署文件
-│   ├── Dockerfile             # 多阶段 Docker 构建
-│   ├── docker-compose.yml     # 完整监控栈编排
+├── deploy/                    # 部署辅助
 │   ├── grafana-dashboard.json # Grafana 仪表板配置
 │   └── validate_dashboard.py  # 仪表板配置验证脚本
 ├── .github/workflows/         # GitHub Actions CI/CD
@@ -496,28 +441,33 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 ## 故障排除
 
 **Exporter 启动失败**
+
 - 检查 `configs/config.json` 格式是否正确（JSON 语法）
 - 确认所有必需字段已填写（`target_host`、`ftp_user`、`ftp_password`）
 - 检查端口号范围（1-65535）和检查间隔范围（1-3600 秒）
 
 **无法连接 FTP 服务器**
+
 - 确认 FTP 服务器地址和端口正确
 - 检查用户名密码是否有效
 - 检查防火墙和网络连通性
 - 查看日志中的 `[ERROR]` 信息
 
 **日志解析无数据**
+
 - 确认日志文件路径正确且有读取权限
 - 检查 vsftpd 是否配置了 `xferlog_enable=YES`
 - 如使用 SSH 模式，确认 SSH 用户有读取日志文件的权限
 - 日志文件为空是正常的（vsftpd 刚启动或无传输活动）
 
 **SSH 连接失败**
+
 - 确认目标服务器 SSH 服务正常运行
 - 检查 SSH 端口、用户名、密码是否正确
 - 确认网络可达性
 
 **指标数据不更新**
+
 - 检查 `check_interval` 配置是否合理
 - 确认 FTP 服务有实际活动
 - 查看 exporter 日志输出
