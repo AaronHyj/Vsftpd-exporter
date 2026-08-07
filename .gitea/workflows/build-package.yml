@@ -36,12 +36,9 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 设置 Go 环境
-        uses: actions/setup-go@v5
-        with:
-          # 不写死具体版本，以 go.mod 的 go 指令为最低版本要求（setup-go 会安装满足要求的版本）
-          go-version-file: go.mod
-          cache: false
+      - name: 检查 Go 环境
+        # 直接用 runner 上已安装的 Go，不做 setup-go 下载
+        run: go version
 
       - name: 代码格式检查
         run: test -z "$(gofmt -s -l .)"
