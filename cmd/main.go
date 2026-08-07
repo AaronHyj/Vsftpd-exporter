@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/textproto"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,24 +30,30 @@ type HealthStatus struct {
 }
 
 var (
-	startTime       = time.Now()
-	lastHealthCheck atomic.Value
-	appVersion      = "1.0.0"
+	startTime  = time.Now()
+	lastProbe  atomic.Value
+	appVersion = "1.0.0"
 )
 
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	lastHealthCheck.Store(now)
+type probeResult struct {
+	ok        bool
+	checkTime time.Time
+	err       string
+}
 
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	status := HealthStatus{
 		Status:    "healthy",
-		Timestamp: now,
+		Timestamp: time.Now(),
 		Uptime:    time.Since(startTime).String(),
 		Version:   appVersion,
 	}
 
-	if lastCheck, ok := lastHealthCheck.Load().(time.Time); ok && !lastCheck.IsZero() {
-		status.LastCheckTime = lastCheck.Format(time.RFC3339)
+	if res, ok := lastProbe.Load().(probeResult); ok && !res.checkTime.IsZero() {
+		status.LastCheckTime = res.checkTime.Format(time.RFC3339)
+		if !res.ok {
+			status.Status = "degraded"
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -55,26 +64,55 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func checkFTPLogin(config *Config, state *ExporterState) error {
+func checkFTPLogin(config *Config) error {
 	conn, err := ftp.Dial(config.TargetHost+":"+config.FTPPort, ftp.DialWithTimeout(10*time.Second))
 	if err != nil {
-		connectionTimeoutsTotal.Inc()
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			connectionTimeoutsTotal.Inc()
+		}
 		return fmt.Errorf("连接FTP服务器失败: %w", err)
 	}
 	defer conn.Quit()
 
-	err = conn.Login(config.FTPUser, config.FTPPassword)
-	if err != nil {
-		if strings.Contains(err.Error(), "530") || strings.Contains(err.Error(), "authentication") || strings.Contains(err.Error(), "login") {
-			authenticationErrorsTotal.Inc()
-			failedLoginsTotal.Inc()
-		} else {
-			failedLoginsTotal.Inc()
+	if err := conn.Login(config.FTPUser, config.FTPPassword); err != nil {
+		var protoErr *textproto.Error
+		if errors.As(err, &protoErr) && protoErr.Code == 530 {
+			return fmt.Errorf("FTP登录失败（认证被拒绝 530）: %w", err)
 		}
 		return fmt.Errorf("FTP登录失败: %w", err)
 	}
 
 	return nil
+}
+
+func runChecks(config *Config, state *ExporterState, sshMgr *SSHManager) {
+	probeRes := probeResult{checkTime: time.Now()}
+	if err := checkFTPLogin(config); err != nil {
+		slog.Error("FTP连接检查失败", "error", err)
+		ftpLoginSuccess.Set(0)
+		probeRes.err = err.Error()
+	} else {
+		ftpLoginSuccess.Set(1)
+		probeRes.ok = true
+	}
+	lastProbe.Store(probeRes)
+
+	if err := checkConnections(config, sshMgr); err != nil {
+		slog.Error("连接检查失败", "error", err)
+	}
+
+	if config.LogFilePath != "" {
+		if err := parseFTPLog(config.LogFilePath, state, sshMgr); err != nil {
+			slog.Error("解析FTP日志失败", "error", err)
+		}
+	}
+
+	if config.VsftplogEnabled && config.VsftplogFilePath != "" {
+		if err := parseVsftpdLog(config, config.VsftplogFilePath, state, sshMgr); err != nil {
+			slog.Error("解析vsftpd日志失败", "error", err)
+		}
+	}
 }
 
 func main() {
@@ -122,6 +160,8 @@ func main() {
 
 	slog.Info("启动监控协程", "interval_seconds", config.CheckInterval)
 	go func() {
+		runChecks(config, state, sshMgr)
+
 		ticker := time.NewTicker(time.Duration(config.CheckInterval) * time.Second)
 		defer ticker.Stop()
 
@@ -131,28 +171,7 @@ func main() {
 				slog.Info("监控协程收到停止信号")
 				return
 			case <-ticker.C:
-				if err := checkFTPLogin(config, state); err != nil {
-					slog.Error("FTP连接检查失败", "error", err)
-					ftpLoginSuccess.Set(0)
-				} else {
-					ftpLoginSuccess.Set(1)
-				}
-
-				if err := checkConnections(config, state, sshMgr); err != nil {
-					slog.Error("连接检查失败", "error", err)
-				}
-
-				if config.LogFilePath != "" {
-					if err := parseFTPLog(config, config.LogFilePath, state, sshMgr); err != nil {
-						slog.Error("解析FTP日志失败", "error", err)
-					}
-				}
-
-				if config.VsftplogEnabled && config.VsftplogFilePath != "" {
-					if err := parseVsftpdLog(config, config.VsftplogFilePath, state, sshMgr); err != nil {
-						slog.Error("解析vsftpd日志失败", "error", err)
-					}
-				}
+				runChecks(config, state, sshMgr)
 			}
 		}
 	}()

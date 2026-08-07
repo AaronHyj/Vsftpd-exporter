@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 )
+
+const maxLinesPerRead = 1000
 
 var (
 	connectRegex     = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+CONNECT:\s+Client\s+"([^"]+)"`)
@@ -71,11 +74,21 @@ func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([
 		return nil, 0, fmt.Errorf("文件路径包含非法字符: %s", filePath)
 	}
 
+	if startPosition > 0 {
+		remoteSize, err := remoteFileSize(sshMgr, filePath)
+		if err != nil {
+			slog.Warn("获取远程文件大小失败，跳过轮转检测", "path", filePath, "error", err)
+		} else if remoteSize < startPosition {
+			slog.Warn("检测到远程日志轮转，从头开始读取", "file_size", remoteSize, "last_position", startPosition, "path", filePath)
+			startPosition = 0
+		}
+	}
+
 	var command string
 	if startPosition > 0 {
-		command = fmt.Sprintf("dd if='%s' bs=1 skip=%d 2>/dev/null", filePath, startPosition)
+		command = fmt.Sprintf("tail -c +%d '%s' 2>/dev/null | head -n %d", startPosition+1, filePath, maxLinesPerRead)
 	} else {
-		command = fmt.Sprintf("cat '%s'", filePath)
+		command = fmt.Sprintf("cat '%s' 2>/dev/null | head -n %d", filePath, maxLinesPerRead)
 	}
 
 	output, err := sshMgr.Execute(command)
@@ -91,6 +104,18 @@ func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([
 	newPosition := startPosition + int64(len(output))
 	slog.Debug("SSH读取文件成功", "lines", len(lines), "position", newPosition)
 	return lines, newPosition, nil
+}
+
+func remoteFileSize(sshMgr *SSHManager, filePath string) (int64, error) {
+	output, err := sshMgr.Execute(fmt.Sprintf("stat -c %%s '%s' 2>/dev/null", filePath))
+	if err != nil {
+		return 0, err
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(output), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("解析远程文件大小失败: %q", output)
+	}
+	return size, nil
 }
 
 func readLocalFile(filePath string, startPosition int64) ([]string, int64, error) {
@@ -115,15 +140,22 @@ func readLocalFile(filePath string, startPosition int64) ([]string, int64, error
 
 	var lines []string
 	bytesRead := int64(0)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		lines = append(lines, line)
-		bytesRead += int64(len(scanner.Bytes())) + 1
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, 0, fmt.Errorf("读取文件失败: %w", err)
+	reader := bufio.NewReader(file)
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			lines = append(lines, strings.TrimRight(line, "\r\n"))
+			bytesRead += int64(len(line))
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, 0, fmt.Errorf("读取文件失败: %w", err)
+		}
+		if len(lines) >= maxLinesPerRead {
+			break
+		}
 	}
 
 	newPosition := startPosition + bytesRead
@@ -174,7 +206,7 @@ func parseXferlogTimestamp(timeStr string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("无法解析xferlog时间戳: %s", timeStr)
 }
 
-func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *SSHManager) error {
+func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error {
 	slog.Debug("开始解析FTP日志文件", "path", logPath, "position", state.lastPosition)
 
 	lines, newPosition, err := readRemoteFile(sshMgr, logPath, state.lastPosition)
@@ -186,7 +218,6 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 	uploadCount := 0
 	downloadCount := 0
 	incompleteCount := 0
-	const maxLinesPerRead = 1000
 
 	totalBytesThisRound := int64(0)
 	var earliestTime, latestTime time.Time
@@ -203,7 +234,7 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 
 		linesProcessed++
 
-		eventTime, direction, clientIP, fileSize, _, transferTime, username, completed := parseStandardXferlog(line)
+		eventTime, direction, clientIP, fileSize, _, transferTime, _, completed := parseStandardXferlog(line)
 		if direction == "" {
 			continue
 		}
@@ -248,9 +279,6 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 
 		if clientIP != "" {
 			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
-		}
-		if username != "" {
-			userConnectionsTotal.WithLabelValues(username).Inc()
 		}
 		if transferTime > 0 {
 			transferDurationSeconds.Observe(float64(transferTime))
@@ -301,6 +329,10 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 	currentTime := time.Now()
 
 	for _, line := range lines {
+		if linesProcessed >= maxLinesPerRead {
+			break
+		}
+
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -383,11 +415,13 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
 			clientIP := matches[4]
 			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-				ftpUploadTotal.Inc()
-				uploadBytesTotal.Add(float64(bytes))
 				state.totalBytesUploaded += bytes
-				if clientIP != "" {
-					clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+				if config.LogFilePath == "" {
+					ftpUploadTotal.Inc()
+					uploadBytesTotal.Add(float64(bytes))
+					if clientIP != "" {
+						clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+					}
 				}
 			}
 			continue
@@ -397,11 +431,13 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
 			clientIP := matches[4]
 			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-				ftpDownloadTotal.Inc()
-				downloadBytesTotal.Add(float64(bytes))
 				state.totalBytesDownloaded += bytes
-				if clientIP != "" {
-					clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+				if config.LogFilePath == "" {
+					ftpDownloadTotal.Inc()
+					downloadBytesTotal.Add(float64(bytes))
+					if clientIP != "" {
+						clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+					}
 				}
 			}
 			continue
@@ -410,6 +446,9 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		// 530 认证错误响应
 		if ftpResponseRegex.MatchString(line) {
 			authenticationErrorsTotal.Inc()
+			if strings.Contains(line, "maximum number of clients") {
+				maxConnectionsReachedTotal.Inc()
+			}
 			continue
 		}
 	}
@@ -482,6 +521,7 @@ func updateUniqueClientsMetric(state *ExporterState, currentTime time.Time) {
 		} else {
 			delete(state.clientLastActivity, clientIP)
 			delete(state.clientConnectTimes, clientIP)
+			delete(state.clientLastConnect, clientIP)
 		}
 	}
 
@@ -503,7 +543,7 @@ func updateActiveProcessesMetric(state *ExporterState, currentTime time.Time) {
 	activeProcesses.Set(float64(activeProcessCount))
 }
 
-func checkConnections(config *Config, state *ExporterState, sshMgr *SSHManager) error {
+func checkConnections(config *Config, sshMgr *SSHManager) error {
 	var output string
 
 	if sshMgr != nil {

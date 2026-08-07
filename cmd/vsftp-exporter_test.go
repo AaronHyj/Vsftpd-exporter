@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -227,5 +228,101 @@ func BenchmarkIsValidHost(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		isValidHost(host)
+	}
+}
+
+func TestReadLocalFilePositionTracking(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+
+	content := "line1\nline2"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	lines, pos, err := readLocalFile(path, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("行数 = %d, 期望 2", len(lines))
+	}
+	// 末行无换行符，position 不能多算 1（BUG-009 回归）
+	if pos != int64(len(content)) {
+		t.Fatalf("position = %d, 期望 %d（末行无换行时不应多算1字节）", pos, len(content))
+	}
+
+	lines, pos2, err := readLocalFile(path, pos)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 0 || pos2 != pos {
+		t.Fatalf("二次读取应无内容: lines=%d, pos=%d, 期望 pos=%d", len(lines), pos2, pos)
+	}
+}
+
+func TestReadLocalFileAppendContinue(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+
+	first := "line1\nline2\n"
+	if err := os.WriteFile(path, []byte(first), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	_, pos, err := readLocalFile(path, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if pos != int64(len(first)) {
+		t.Fatalf("position = %d, 期望 %d", pos, len(first))
+	}
+
+	appendContent := "line3\nline4\n"
+	if err := os.WriteFile(path, []byte(first+appendContent), 0644); err != nil {
+		t.Fatalf("追加测试文件失败: %v", err)
+	}
+
+	lines, pos2, err := readLocalFile(path, pos)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 2 || lines[0] != "line3" || lines[1] != "line4" {
+		t.Fatalf("追加后行 = %v, 期望 [line3 line4]", lines)
+	}
+	if pos2 != int64(len(first)+len(appendContent)) {
+		t.Fatalf("追加后 position = %d, 期望 %d", pos2, len(first)+len(appendContent))
+	}
+}
+
+func TestReadLocalFileLineCap(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+
+	var sb strings.Builder
+	for i := 0; i < maxLinesPerRead+500; i++ {
+		sb.WriteString("line\n")
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	lines, pos, err := readLocalFile(path, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != maxLinesPerRead {
+		t.Fatalf("行数 = %d, 期望 %d", len(lines), maxLinesPerRead)
+	}
+	if pos != int64(maxLinesPerRead*len("line\n")) {
+		t.Fatalf("position = %d, 期望 %d", pos, maxLinesPerRead*len("line\n"))
+	}
+
+	lines, _, err = readLocalFile(path, pos)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 500 {
+		t.Fatalf("剩余行数 = %d, 期望 500", len(lines))
 	}
 }
