@@ -81,7 +81,7 @@ jobs:
 
       - name: 上传构建产物
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: vsftp-exporter-${{ steps.version.outputs.VERSION }}
           path: vsftp-exporter-*.tar.gz
