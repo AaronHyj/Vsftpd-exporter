@@ -26,13 +26,16 @@ type HealthStatus struct {
 	Timestamp     time.Time `json:"timestamp"`
 	Uptime        string    `json:"uptime"`
 	LastCheckTime string    `json:"last_check_time,omitempty"`
+	Error         string    `json:"error,omitempty"`
 	Version       string    `json:"version"`
+	BuildTime     string    `json:"build_time,omitempty"`
 }
 
 var (
 	startTime  = time.Now()
 	lastProbe  atomic.Value
 	appVersion = "1.0.0"
+	buildTime  = "unknown"
 )
 
 type probeResult struct {
@@ -47,17 +50,21 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 		Uptime:    time.Since(startTime).String(),
 		Version:   appVersion,
+		BuildTime: buildTime,
 	}
 
+	statusCode := http.StatusOK
 	if res, ok := lastProbe.Load().(probeResult); ok && !res.checkTime.IsZero() {
 		status.LastCheckTime = res.checkTime.Format(time.RFC3339)
 		if !res.ok {
 			status.Status = "degraded"
+			status.Error = res.err
+			statusCode = http.StatusServiceUnavailable
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(statusCode)
 
 	if err := json.NewEncoder(w).Encode(status); err != nil {
 		slog.Error("编码健康检查响应失败", "error", err)

@@ -4,10 +4,10 @@
 
 ## 审查信息
 
-- 审查日期：2026-08-07（第一轮）/ 2026-08-07（第二轮）
-- 审查范围：`cmd/` 全部源码（main.go / config.go / metrics.go / ssh.go / parsers.go）
-- 审查重点：登录探测（验证可登录性）逻辑、对 vsftpd 服务端的潜在影响、修复后回归
-- 验证命令：`go build -o /dev/null .`、`go vet ./...`、`go test -v -race ./...`
+- 审查日期：2026-08-07（第一轮）/ 2026-08-07（第二轮）/ 2026-08-09（第三轮深度审查与修复）
+- 审查范围：`cmd/` 全部源码（main.go / config.go / metrics.go / ssh.go / parsers.go / tests）及 Makefile
+- 审查重点：登录探测与采样污染、SSH读取性能与轮转、文件名包含空格解析、未换行半行保护、健康检查与死代码死字段清理
+- 验证命令：`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -v -race ./...`
 
 ## Bug 列表
 
@@ -26,18 +26,22 @@
 | BUG-011 | 低 | `cmd/metrics.go` | `maxConnectionsReachedTotal` 从未递增，告警永不触发 | 已修复 |
 | BUG-012 | 低 | `cmd/main.go` / `cmd/parsers.go` | 死参数：checkFTPLogin 的 state、checkConnections 的 state、parseFTPLog 的 config | 已修复 |
 | BUG-013 | 低 | `cmd/main.go` | 启动后首个采集周期内指标为空，health 无参考信息 | 已修复 |
-| BUG-014 | 低 | `cmd/parsers.go` extractTimestamp | 生产代码死代码（仅测试引用） | 待处理 |
+| BUG-014 | 低 | `cmd/parsers.go` extractTimestamp | 生产代码死代码（仅测试引用） | 已修复 |
 | BUG-015 | 低 | `cmd/ssh.go` | `InsecureIgnoreHostKey()` 存在 MITM 风险 | 已知限制 |
 | BUG-016 | 低 | `configs/config.json` | 明文存储 SSH/FTP 密码 | 已知限制 |
 | BUG-017 | 中 | `cmd/parsers.go` | `clientLastConnect` map 无清理逻辑，随新客户端 IP 无限增长（内存泄漏） | 已修复 |
 | BUG-018 | 中 | `cmd/parsers.go` parseFTPLog / parseVsftpdLog | 单轮新增日志超过 1000 行时，position 直接跳到文件末尾，超限行被永久跳过（数据丢失） | 已修复 |
-| BUG-019 | 低 | `cmd/parsers.go` | `state.lastBytesTransferred` 只写不读，死字段 | 待处理 |
-| BUG-020 | 低 | `cmd/parsers.go` | `state.userClientMapping` 只写不读，死数据（随唯一用户名增长） | 待处理 |
-| BUG-021 | 低 | `Makefile` | `-X main.buildTime=$(BUILD_TIME)` 引用了代码中不存在的变量 `main.buildTime` | 已知限制 |
-| BUG-022 | 低 | `cmd/main.go` healthCheckHandler | degraded 状态仍返回 HTTP 200，且 `probeResult.err` 未在响应中暴露 | 改进建议 |
+| BUG-019 | 低 | `cmd/parsers.go` | `state.lastBytesTransferred` 只写不读，死字段 | 已修复 |
+| BUG-020 | 低 | `cmd/parsers.go` | `state.userClientMapping` 只写不读，死数据（随唯一用户名增长内存泄漏） | 已修复 |
+| BUG-021 | 低 | `Makefile` / `cmd/main.go` | `-X main.buildTime=$(BUILD_TIME)` 引用了代码中不存在的变量 `main.buildTime` | 已修复 |
+| BUG-022 | 低 | `cmd/main.go` healthCheckHandler | degraded 状态仍返回 HTTP 200，且 `probeResult.err` 未在响应中暴露 | 已修复 |
 | BUG-023 | 低 | `cmd/main.go` checkFTPLogin | SSH 模式下登录探测仍直连 exporter→target:FTPPort；若 FTP 端口对 exporter 不可达则 `vsftp_login_success` 恒为 0 | 已知限制 |
 | BUG-024 | 低 | `cmd/parsers.go` | 日志生产速率持续高于 1000 行/轮时，解析永远落后（backpressure 上限） | 已知限制 |
-| BUG-025 | 低 | `cmd/parsers.go` remoteFileSize | 每轮每个日志文件额外一次 SSH 往返（stat），可合并到读取命令中 | 待处理 |
+| BUG-025 | 低 | `cmd/parsers.go` remoteFileSize | 每轮每个日志文件额外一次 SSH 往返（stat），可合并到读取命令中 | 已修复 |
+| BUG-026 | 高 | `cmd/parsers.go` parseStandardXferlog | 文件名中包含空格时，`fields` 拆分导致 direction/username/completionStatus 错位解析，将成功传输误判为传输失败错误 | 已修复 |
+| BUG-027 | 中 | `cmd/parsers.go` parseFTPLog | 当本轮无传输日志（0 字节传输）时，`bandwidthUsage` 仪表盘指标未被重置为 0，导致带宽指标永久停留在历史非零峰值 | 已修复 |
+| BUG-028 | 中 | `cmd/parsers.go` readLocalFile / readRemoteFile | 在读取到达文件末尾（EOF）时若 vsftpd 正在写入半行日志（无换行符 `\n`），会将半行日志消费并推进文件 position，导致下一轮日志拼接断裂并丢失事件 | 已修复 |
+| BUG-029 | 低 | `cmd/parsers.go` loginFailRegex | 用户名中括号正则表达式使用 `+` (`\[([^\]]+)\]`)，导致匿名或未提供用户名失败登录产生 `[]` 时无法匹配 | 已修复 |
 
 ## 详细说明
 
@@ -75,7 +79,7 @@
 
 **问题**：本地模式（`readLocalFile`）有 `size < startPosition` 的轮转检测，SSH 模式没有。logrotate 后 `dd skip` 越过 EOF 输出为空，position 永不复位，后续数据静默丢失。
 
-**修复**：SSH 读取前先通过 `stat -c %s` 获取远程文件大小，若 `size < startPosition` 则从头读取。
+**修复**：SSH 读取前检测远程文件大小，若 `size < startPosition` 则从头读取。
 
 ### BUG-004：SSH 命令执行无超时（高）
 
@@ -163,7 +167,7 @@
 
 **问题**：该函数仅在单元测试中引用，生产代码未使用。
 
-**建议**：后续随测试清理一并移除（保留以维持现有测试，YAGNI）。
+**修复**：第三轮审查中清理该死代码及测试中对应的单测和未引用的正则定义。
 
 ### BUG-015：SSH 不校验主机密钥（低）
 
@@ -203,31 +207,31 @@
 
 **问题**：`state.lastBytesTransferred` 只在 parseFTPLog 中累加（`+= totalBytesThisRound`），从未被读取，属于写后不用的死数据。
 
-**建议**：删除该字段及其累加逻辑。
+**修复**：第三轮审查中移除 `ExporterState` 中的 `lastBytesTransferred` 字段及其累加逻辑。
 
-### BUG-020：userClientMapping 死数据（低）
+### BUG-020：userClientMapping 死数据与内存泄漏（低）
 
 **位置**：`cmd/parsers.go:46`
 
-**问题**：`userClientMapping`（用户名→IP）只在 OK LOGIN 时写入，从未被读取，属于只写不用的 map，并随唯一用户名缓慢增长。
+**问题**：`userClientMapping`（用户名→IP）只在 OK LOGIN 时写入，从未被读取，属于只写不用的 map，且从未清理，随唯一用户名无上限增长导致内存泄漏。
 
-**建议**：若后续无消费需求，删除该字段（需同步调整 `property_test.go` 中对应断言）。
+**修复**：第三轮审查中移除 `ExporterState` 中的 `userClientMapping` 字段及其写入逻辑与测试断言。
 
 ### BUG-021：Makefile 引用不存在的 buildTime 变量（低）
 
-**位置**：`Makefile:9`
+**位置**：`Makefile:9` / `cmd/main.go`
 
-**问题**：`-X main.buildTime=$(BUILD_TIME)` 注入的是 `main.buildTime`，但 `cmd/main.go` 中并不存在该变量（仅有 `appVersion`），该 ldflags 注入无效。
+**问题**：`-X main.buildTime=$(BUILD_TIME)` 注入的是 `main.buildTime`，但 `cmd/main.go` 中并不存在该变量，该 ldflags 注入无效。
 
-**建议**：在 `main.go` 添加 `buildTime` 变量并在 `/health` 或日志中暴露，或移除该注入。
+**修复**：在 `main.go` 中声明 `buildTime` 变量，并在 `HealthStatus` 及 `/health` 响应中暴露。
 
-### BUG-022：/health 未区分 HTTP 状态码（低）
+### BUG-022：/health 未区分 HTTP 状态码及错误隐蔽（低）
 
 **位置**：`cmd/main.go` healthCheckHandler
 
-**问题**：`degraded` 状态下仍返回 HTTP 200，仅靠响应体 `status` 字段区分；`probeResult.err`（失败原因）也未在响应中暴露，排障不便。
+**问题**：`degraded` 状态下仍返回 HTTP 200，仅靠响应体 `status` 字段区分；`probeResult.err`（失败原因）也未在响应中暴露，外部健康检查器无法根据 HTTP code 告警。
 
-**建议**：`degraded` 时返回 503 并在响应中加入 `error` 字段（注意可能影响已有依赖 200 的监控）。
+**修复**：`degraded` 状态时返回 HTTP 503 Service Unavailable 并在响应体中引入 `error` 字段暴露具体探活报错。
 
 ### BUG-023：SSH 模式下探测仍直连 FTP 端口（低）
 
@@ -247,11 +251,43 @@
 
 ### BUG-025：SSH 轮转检测额外一次往返（低）
 
-**位置**：`cmd/parsers.go` remoteFileSize
+**位置**：`cmd/parsers.go` readRemoteFile / remoteFileSize
 
-**问题**：每轮每个日志文件先 `stat -c %s` 再读取，增加一次 SSH 往返。可合并为单条命令（如先 `stat` 后 `tail`，或使用 `wc -c`）。
+**问题**：每轮每个日志文件先 `stat -c %s` 再读取，增加一次额外 SSH 往返。
 
-**建议**：将 `stat` 与读取合并到一次 SSH 执行中，减少往返次数。
+**修复**：第三轮审查中将 `stat` 与 `tail`/`cat` 合并至单条 SSH 命令执行（`s=$(stat ...); if [ "$s" -lt pos ]; then echo ROTATED; ... else echo OK; ... fi`），在保证远程轮转检测的同时消除了额外往返开销。
+
+### BUG-026：parseStandardXferlog 文件名包含空格解析错位（高）
+
+**位置**：`cmd/parsers.go` parseStandardXferlog
+
+**问题**：标准 xferlog 日志按空格分隔。若传输的文件名路径包含空格，`strings.Fields(line)` 拆分后的字段数 `n > 18`。旧实现硬编码索引用 `fields[11]` 取 direction、`fields[13]` 取 username、`fields[17]` 取 completionStatus，导致字段全部错位。例如 `completionStatus` 误取到 `*` 而非 `c`，导致成功的带有空格文件名的传输被错误归类为传输失败，并触发 `vsftp_transfer_errors_total` 指标累加。
+
+**修复**：xferlog 结尾 9 个字段（`transferType` 至 `completionStatus`）固定无空格，从切片末尾逆向索引（如 `direction` 为 `fields[n-7]`，`username` 为 `fields[n-5]`，`completionStatus` 为 `fields[n-1]`），文件名合并 `fields[8:n-9]`。
+
+### BUG-027：bandwidthUsage 带宽指标在无传输时无法降零（中）
+
+**位置**：`cmd/parsers.go` parseFTPLog
+
+**问题**：`bandwidthUsage.Set(...)` 仅在 `!earliestTime.IsZero() && !latestTime.IsZero()` 且 `logTimeDiff > 0` 时调用。当某个采样周期内无新的传输日志（`totalBytesThisRound == 0`）时，条件不满足，`bandwidthUsage` 仪表盘 Gauge 保留上一周期计算出的非零数值，导致在 FTP 停止传输后带宽指标永久停留在历史峰值。
+
+**修复**：当 `totalBytesThisRound == 0` 时，显式调用 `bandwidthUsage.Set(0)`，确保空闲时带宽指标准确回落为 0。
+
+### BUG-028：EOF 处消费未完成写入的半行日志（中）
+
+**位置**：`cmd/parsers.go` readLocalFile / readRemoteFile
+
+**问题**：vsftpd 在并发写入日志时，可能正好在 exporter 采样瞬间仅写入半行日志（无末尾 `\n`）。旧实现在 EOF 处也会将该半行日志消费并推进文件 offset/position。下一周期 vsftpd 补齐该行剩余部分及 `\n` 时，exporter 从中途读取后半行，导致前后两半行均因正则匹配失败而被丢弃，丢失传输/登录事件。
+
+**修复**：在读取末尾（EOF）检测末行是否有 `\n`。若末行无换行符，视为尚未写入完成的脏数据，不追加至待处理行切片且不推进 `newPosition`，留待下一周期整行读取。
+
+### BUG-029：loginFailRegex 无法匹配空用户名 FAIL LOGIN（低）
+
+**位置**：`cmd/parsers.go` loginFailRegex
+
+**问题**：`loginFailRegex` 使用 `\[([^\]]+)\]` 匹配用户名。当客户端在未发送 USER 命令或匿名尝试失败产生 `[pid 1234] [] FAIL LOGIN: Client "x.x.x.x"` 时，中括号内字符数为 0，`+` 量词导致正则匹配失败，遗漏登录失败事件。
+
+**修复**：将 `\[([^\]]+)\]` 修改为 `\[([^\]]*)\]`，允许中括号内部为空字符串。
 
 ## 已知特性说明
 
