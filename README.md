@@ -4,7 +4,6 @@
 
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status//SchicksalNvi/Vsftpd-exporter/ci.yml?label=CI)](https://github.com//SchicksalNvi/Vsftpd-exporter/actions)
 
 ## 快速开始
 
@@ -129,6 +128,8 @@ make build-all       # 所有平台
 | `github.com/jlaffaye/ftp` | v0.2.0 | FTP 客户端，用于连接探测 |
 | `github.com/prometheus/client_golang` | v1.19.1 | Prometheus 客户端库 |
 | `golang.org/x/crypto` | v0.43.0 | SSH 客户端，用于远程采集 |
+| `pgregory.net/rapid` | v1.2.0 | 属性测试（测试依赖） |
+| `github.com/davecgh/go-spew` | v1.1.1 | 测试断言（间接依赖） |
 
 ## 配置说明
 
@@ -211,11 +212,12 @@ curl http://localhost:9101/health
   "timestamp": "2025-10-15T16:04:42+08:00",
   "uptime": "2h30m15s",
   "last_check_time": "2025-10-15T16:04:42+08:00",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "build_time": "2025-10-15T06:00:00_UTC"
 }
 ```
 
-- `status`：`healthy` 表示最近一次 FTP 登录探测成功，`degraded` 表示探测失败（FTP 服务不可达或登录失败）。
+- `status`：`healthy` 表示最近一次 FTP 登录探测成功，`degraded` 表示探测失败（FTP 服务不可达或登录失败）。`degraded` 时返回 HTTP 503，并附带 `error` 字段说明失败原因。
 - `last_check_time`：最近一次 FTP 探测发生的时间。
 
 > **注意（对 vsftpd 服务端的影响）**：exporter 会使用配置的真实账号周期性地执行 FTP 登录探测（`vsftp_login_success` 指标）。每次探测都会在服务端产生一次真实的连接与认证，占用连接配额并出现在 vsftpd 日志中。建议：
@@ -240,7 +242,7 @@ curl http://localhost:9101/health
 }
 ```
 
-SSH 模式下，exporter 会通过 SSH 执行 `ss -tnH`、`cat` 和 `dd` 命令来采集数据。SSH 用户需要有读取日志文件和执行 ss 的权限。
+SSH 模式下，exporter 会通过 SSH 执行 `ss -tnH` 统计连接状态，用 `tail -c +N` / `cat` 增量读取日志，并用 `stat` 检测日志轮转。SSH 用户需要有读取日志文件和执行 ss 的权限。
 
 ### systemd 服务
 
@@ -341,7 +343,7 @@ sudo systemctl enable --now vsftp-exporter
 
 ## Prometheus 配置
 
-`configs/prometheus.yml` 提供了抓取配置模板。手动配置时添加：
+`deploy/prometheus.yml.example` 提供了抓取配置模板。手动配置时添加：
 
 ```yaml
 scrape_configs:
@@ -358,7 +360,7 @@ scrape_configs:
 
 ### 告警规则
 
-`configs/alerts.yml` 包含以下告警：
+`deploy/alerts.yml.example` 包含以下告警：
 
 | 告警名称 | 严重级别 | 触发条件 |
 | -------- | -------- | -------- |
@@ -419,14 +421,21 @@ count(rate(vsftp_user_logins_total[5m]) > 0)
 
 # Top 10 客户端连接
 topk(10, rate(vsftp_client_connections_total[5m]))
+
+# 按原因分类的 FTP 错误
+sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
+
+# 目标目录不存在错误
+rate(vsftp_ftp_errors_total{reason="dir_not_found"}[5m])
 ```
 
 ## CI/CD
 
-项目配置了 GitHub Actions 工作流：
+项目使用 Gitea Actions 工作流：
 
-- **CI** (`.github/workflows/ci.yml`)：在 push/PR 到 main/develop 分支时触发，执行代码格式检查、静态分析、单元测试（含 race 检测和覆盖率），构建二进制文件
-- **Release** (`.github/workflows/release.yml`)：在推送 `v*` 标签时触发，构建 Linux/Windows/macOS 多平台二进制文件并创建 GitHub Release
+- **Build & Package** (`.gitea/workflows/build-package.yml`)：仅在推送 `v*` 标签时触发，执行 gofmt 检查、`go vet`、单元测试，串行构建并打包 Linux/Windows/macOS 多平台二进制，上传构建产物，并创建或更新 Gitea Release 及上传资产。通过 `GOFLAGS=-p=1`、`GOMAXPROCS=1`、`CGO_ENABLED=0`、`GOMEMLIMIT=180MiB`、`GOGC=30` 及单 job 串行执行，将峰值内存控制在 200 MiB 以内。
+
+- **Legacy CI** (`.github/workflows/ci.yml`)：GitHub Actions 遗留配置（push/PR 到 main/develop 时执行格式检查、静态分析、测试、构建），仅用于 GitHub，Gitea 上不会运行。
 
 ## 项目结构
 
@@ -442,20 +451,22 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 │   └── property_test.go       # 属性测试
 ├── configs/                   # 配置文件
 │   ├── config.example.json    # 配置文件模板
-│   ├── config.json            # 实际配置文件（.gitignore 排除）
-│   ├── prometheus.yml         # Prometheus 抓取配置
-│   └── alerts.yml             # Prometheus 告警规则
+│   └── config.json            # 实际配置文件（.gitignore 排除）
 ├── deploy/                    # 部署辅助
+│   ├── prometheus.yml.example # Prometheus 抓取配置模板
+│   ├── alerts.yml.example     # Prometheus 告警规则模板
 │   ├── grafana-dashboard.json # Grafana 仪表板配置
 │   └── vsftpd-exporter.service # systemd 服务文件
 ├── docs/                      # 文档
 │   └── bugrecord.md           # Bug 记录（审查发现与修复状态）
-├── .github/workflows/         # GitHub Actions CI/CD
-│   ├── ci.yml                 # 持续集成
-│   └── release.yml            # 发布流程
+├── .gitea/workflows/          # Gitea Actions CI/CD
+│   └── build-package.yml      # 构建、打包、发布工作流
+├── .github/workflows/         # GitHub Actions 遗留工作流
+│   └── ci.yml                 # 持续集成（仅 GitHub）
 ├── Makefile                   # 构建、测试、交叉编译
 ├── go.mod / go.sum            # Go 模块依赖
-├── README.md
+├── README.md                  # 文档（中文）
+├── README_EN.md               # 文档（英文）
 └── LICENSE                    # MIT 许可证
 ```
 
@@ -493,6 +504,10 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 - 确认 FTP 服务有实际活动
 - 查看 exporter 日志输出
 
+**同时启用 xferlog 与 vsftpd.log 时的计数说明**
+
+传输类指标（`vsftp_upload_total`、`vsftp_download_total`、`vsftp_upload_bytes_total`、`vsftp_download_bytes_total`、`vsftp_client_files_total`）以 xferlog 为权威来源；同时启用 vsftpd.log 时不会重复计数。`vsftp_user_connections_total` 按登录事件（OK LOGIN）计数，需要启用 vsftpd.log。
+
 ### 日志级别
 
 通过 `-log-level` 参数控制日志输出级别，默认 `info`。可选值：`debug`、`info`、`warn`、`error`。
@@ -513,12 +528,6 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 - 预编译正则表达式，避免重复编译开销
 - 支持日志文件轮转检测
 - 典型资源占用：内存 < 50MB，CPU < 5%
-
-## 故障排除
-
-**同时启用 xferlog 与 vsftpd.log 时的计数说明**
-
-传输类指标（`vsftp_upload_total`、`vsftp_download_total`、`vsftp_upload_bytes_total`、`vsftp_download_bytes_total`、`vsftp_client_files_total`）以 xferlog 为权威来源；同时启用 vsftpd.log 时不会重复计数。`vsftp_user_connections_total` 按登录事件（OK LOGIN）计数，需要启用 vsftpd.log。
 
 ## 贡献指南
 

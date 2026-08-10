@@ -128,6 +128,8 @@ make build-all       # all platforms
 | `github.com/jlaffaye/ftp` | v0.2.0 | FTP client used for the login probe |
 | `github.com/prometheus/client_golang` | v1.19.1 | Prometheus client library |
 | `golang.org/x/crypto` | v0.43.0 | SSH client used for remote collection |
+| `pgregory.net/rapid` | v1.2.0 | Property testing (test dependency) |
+| `github.com/davecgh/go-spew` | v1.1.1 | Test assertions (indirect dependency) |
 
 ## Configuration
 
@@ -210,11 +212,12 @@ Example health check response:
   "timestamp": "2025-10-15T16:04:42+08:00",
   "uptime": "2h30m15s",
   "last_check_time": "2025-10-15T16:04:42+08:00",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "build_time": "2025-10-15T06:00:00_UTC"
 }
 ```
 
-- `status`: `healthy` means the most recent FTP login probe succeeded; `degraded` means it failed (FTP service unreachable or login failed).
+- `status`: `healthy` means the most recent FTP login probe succeeded; `degraded` means it failed (FTP service unreachable or login failed). When `degraded`, the endpoint returns HTTP 503 and includes an `error` field with the failure reason.
 - `last_check_time`: the time of the most recent FTP probe.
 
 > **Note (impact on the vsftpd server)**: the exporter periodically performs FTP login probes using a configured real account (the `vsftp_login_success` metric). Every probe produces a real connection and authentication on the server, consuming a connection slot and appearing in the vsftpd logs. Recommendations:
@@ -239,7 +242,7 @@ To monitor vsftpd on a remote server:
 }
 ```
 
-In SSH mode the exporter runs `ss -tnH`, `cat` and `dd` commands over SSH. The SSH user needs read access to the log files and permission to run `ss`.
+In SSH mode the exporter runs `ss -tnH` to collect connection states, uses `tail -c +N` / `cat` for incremental log reads, and `stat` for log rotation detection. The SSH user needs read access to the log files and permission to run `ss`.
 
 ### systemd Service
 
@@ -340,7 +343,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 
 ## Prometheus Configuration
 
-`configs/prometheus.yml` provides a scrape config template. Add the following manually:
+`deploy/prometheus.yml.example` provides a scrape config template. Add the following manually:
 
 ```yaml
 scrape_configs:
@@ -357,7 +360,7 @@ scrape_configs:
 
 ### Alert Rules
 
-`configs/alerts.yml` contains the following alerts:
+`deploy/alerts.yml.example` contains the following alerts:
 
 | Alert | Severity | Condition |
 | -------- | -------- | -------- |
@@ -430,9 +433,9 @@ rate(vsftp_ftp_errors_total{reason="dir_not_found"}[5m])
 
 The project uses a Gitea Actions workflow:
 
-- **Build & Package** (`.gitea/workflows/build-package.yml`): triggered on push of a `v*` tag. Runs gofmt check, `go vet`, unit tests, builds/packages multi-platform binaries (Linux/Windows/macOS), uploads artifacts, and creates/updates a Gitea Release with assets.
+- **Build & Package** (`.gitea/workflows/build-package.yml`): triggered only on push of a `v*` tag. Runs gofmt check, `go vet`, unit tests, builds/packages multi-platform binaries (Linux/Windows/macOS), uploads artifacts, and creates/updates a Gitea Release with assets. Peak memory stays within ~200 MiB via `GOFLAGS=-p=1`, `GOMAXPROCS=1`, `CGO_ENABLED=0`, `GOMEMLIMIT=180MiB`, `GOGC=30`, serialized multi-platform builds, and a single job.
 
-The workflow keeps peak memory within ~200 MiB via `GOFLAGS=-p=1`, `GOMAXPROCS=1`, `CGO_ENABLED=0`, `GOMEMLIMIT=180MiB`, `GOGC=30`, serialized multi-platform builds, and a single job.
+- **Legacy CI** (`.github/workflows/ci.yml`): a legacy GitHub Actions workflow (runs format check, static analysis, tests, build on push/PR to main/develop). GitHub only; it is not used on Gitea.
 
 ## Project Structure
 
@@ -448,10 +451,10 @@ The workflow keeps peak memory within ~200 MiB via `GOFLAGS=-p=1`, `GOMAXPROCS=1
 │   └── property_test.go       # Property tests
 ├── configs/                   # Config files
 │   ├── config.example.json    # Config file template
-│   ├── config.json            # Actual config (excluded by .gitignore)
-│   ├── prometheus.yml         # Prometheus scrape config
-│   └── alerts.yml             # Prometheus alert rules
+│   └── config.json            # Actual config (excluded by .gitignore)
 ├── deploy/                    # Deployment helpers
+│   ├── prometheus.yml.example # Prometheus scrape config template
+│   ├── alerts.yml.example     # Prometheus alert rules template
 │   ├── grafana-dashboard.json # Grafana dashboard config
 │   └── vsftpd-exporter.service # systemd service file
 ├── docs/                      # Documentation
@@ -459,7 +462,7 @@ The workflow keeps peak memory within ~200 MiB via `GOFLAGS=-p=1`, `GOMAXPROCS=1
 ├── .gitea/workflows/          # Gitea Actions CI/CD
 │   └── build-package.yml      # Build, package, and release workflow
 ├── .github/workflows/         # Legacy GitHub Actions workflows
-│   └── ci.yml                 # Continuous integration
+│   └── ci.yml                 # Continuous integration (GitHub only)
 ├── Makefile                   # Build, test, cross compilation
 ├── go.mod / go.sum            # Go module dependencies
 ├── README.md                  # Documentation (Chinese)
