@@ -399,7 +399,7 @@ Dashboard features:
 
 ### Import
 
-Log in to Grafana → click "+" → "Import" → upload `deploy/grafana-dashboard.json` → select the Prometheus data source.
+Log in to Grafana → click "+" → "Import" → upload `deploy/grafana-dashboard.json` → select your Prometheus instance in the data source picker (the dashboard references the data source via the `${DS_PROMETHEUS}` variable, so no fixed name is required).
 
 ### Useful PromQL Queries
 

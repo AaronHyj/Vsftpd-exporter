@@ -399,7 +399,7 @@ rule_files:
 
 ### 导入方式
 
-登录 Grafana → 点击 "+" → "Import" → 上传 `deploy/grafana-dashboard.json` → 选择 Prometheus 数据源
+登录 Grafana → 点击 "+" → "Import" → 上传 `deploy/grafana-dashboard.json` → 在数据源选择器中选中你的 Prometheus 实例（仪表盘通过 `${DS_PROMETHEUS}` 变量引用数据源，不依赖固定名称）
 
 ### 常用 PromQL 查询
 
