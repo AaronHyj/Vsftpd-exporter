@@ -16,10 +16,15 @@ name: Build & Package
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
     tags: ['v*']
-  pull_request:
-    branches: [main, develop]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   GOFLAGS: '-p=1'
