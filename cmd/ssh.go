@@ -51,7 +51,7 @@ func (m *SSHManager) Execute(command string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return executeSSHCommand(client, command)
+	return executeSSHCommand(client, command, sshCommandTimeout)
 }
 
 // Close 关闭 SSH 连接
@@ -88,17 +88,33 @@ func createSSHClient(config *Config) (*ssh.Client, error) {
 	return client, nil
 }
 
-func executeSSHCommand(client *ssh.Client, command string) (string, error) {
+const sshCommandTimeout = 10 * time.Second
+
+func executeSSHCommand(client *ssh.Client, command string, timeout time.Duration) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("创建SSH会话失败: %w", err)
 	}
 	defer session.Close()
 
-	output, err := session.Output(command)
-	if err != nil {
-		return "", fmt.Errorf("执行SSH命令失败: %w", err)
+	type result struct {
+		output []byte
+		err    error
 	}
+	resultCh := make(chan result, 1)
+	go func() {
+		output, err := session.Output(command)
+		resultCh <- result{output, err}
+	}()
 
-	return string(output), nil
+	select {
+	case res := <-resultCh:
+		if res.err != nil {
+			return "", fmt.Errorf("执行SSH命令失败: %w", res.err)
+		}
+		return string(res.output), nil
+	case <-time.After(timeout):
+		session.Close()
+		return "", fmt.Errorf("执行SSH命令超时: %s", command)
+	}
 }

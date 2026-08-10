@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 )
 
 func TestIsValidHost(t *testing.T) {
@@ -189,28 +189,14 @@ func TestCheckLogFileAccess(t *testing.T) {
 	}
 }
 
-func TestExtractTimestamp(t *testing.T) {
-	tests := []struct {
-		name string
-		line string
-	}{
-		{"标准格式", "2025-10-15 16:04:42 [INFO] Test message"},
-		{"syslog格式", "Wed Oct 15 16:04:42 2025 [INFO] Test message"},
-		{"无时间戳", "This is a log line without timestamp"},
+func TestLoginFailRegexWithEmptyUsername(t *testing.T) {
+	line := "Sun Aug 9 16:34:51 2026 [pid 1234] [] FAIL LOGIN: Client \"192.168.1.100\""
+	matches := loginFailRegex.FindStringSubmatch(line)
+	if matches == nil {
+		t.Fatalf("loginFailRegex 应能匹配空用户名的 FAIL LOGIN 行")
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			timestamp := extractTimestamp(tt.line)
-			if timestamp <= 0 {
-				t.Errorf("extractTimestamp(%q) 返回无效时间戳: %d", tt.line, timestamp)
-			}
-			// 检查时间戳是否在合理范围内（不应该是1970年或未来很远）
-			now := time.Now().Unix()
-			if timestamp < 946684800 || timestamp > now+86400 { // 2000-01-01 到 明天
-				t.Errorf("extractTimestamp(%q) 返回不合理的时间戳: %d", tt.line, timestamp)
-			}
-		})
+	if matches[4] != "192.168.1.100" {
+		t.Fatalf("Client IP = %q, 期望 192.168.1.100", matches[4])
 	}
 }
 
@@ -227,5 +213,108 @@ func BenchmarkIsValidHost(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		isValidHost(host)
+	}
+}
+
+func TestReadLocalFilePositionTracking(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+
+	content := "line1\nline2"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	lines, pos, err := readLocalFile(path, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 1 || lines[0] != "line1" {
+		t.Fatalf("行 = %v, 期望 [line1]（末行无换行符暂不消费）", lines)
+	}
+	if pos != int64(len("line1\n")) {
+		t.Fatalf("position = %d, 期望 %d", pos, len("line1\n"))
+	}
+
+	// 追加换行符后再次读取
+	if err := os.WriteFile(path, []byte(content+"\n"), 0644); err != nil {
+		t.Fatalf("更新测试文件失败: %v", err)
+	}
+
+	lines2, pos2, err := readLocalFile(path, pos)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines2) != 1 || lines2[0] != "line2" {
+		t.Fatalf("二次读取行 = %v, 期望 [line2]", lines2)
+	}
+	if pos2 != int64(len(content)+1) {
+		t.Fatalf("二次读取 position = %d, 期望 %d", pos2, len(content)+1)
+	}
+}
+
+func TestReadLocalFileAppendContinue(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+
+	first := "line1\nline2\n"
+	if err := os.WriteFile(path, []byte(first), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	_, pos, err := readLocalFile(path, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if pos != int64(len(first)) {
+		t.Fatalf("position = %d, 期望 %d", pos, len(first))
+	}
+
+	appendContent := "line3\nline4\n"
+	if err := os.WriteFile(path, []byte(first+appendContent), 0644); err != nil {
+		t.Fatalf("追加测试文件失败: %v", err)
+	}
+
+	lines, pos2, err := readLocalFile(path, pos)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 2 || lines[0] != "line3" || lines[1] != "line4" {
+		t.Fatalf("追加后行 = %v, 期望 [line3 line4]", lines)
+	}
+	if pos2 != int64(len(first)+len(appendContent)) {
+		t.Fatalf("追加后 position = %d, 期望 %d", pos2, len(first)+len(appendContent))
+	}
+}
+
+func TestReadLocalFileLineCap(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+
+	var sb strings.Builder
+	for i := 0; i < maxLinesPerRead+500; i++ {
+		sb.WriteString("line\n")
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	lines, pos, err := readLocalFile(path, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != maxLinesPerRead {
+		t.Fatalf("行数 = %d, 期望 %d", len(lines), maxLinesPerRead)
+	}
+	if pos != int64(maxLinesPerRead*len("line\n")) {
+		t.Fatalf("position = %d, 期望 %d", pos, maxLinesPerRead*len("line\n"))
+	}
+
+	lines, _, err = readLocalFile(path, pos)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 500 {
+		t.Fatalf("剩余行数 = %d, 期望 500", len(lines))
 	}
 }

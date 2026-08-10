@@ -52,9 +52,6 @@ func TestPropertyNewExporterStateInit(t *testing.T) {
 		if state.clientConnectTimes == nil {
 			t.Fatal("clientConnectTimes is nil")
 		}
-		if state.userClientMapping == nil {
-			t.Fatal("userClientMapping is nil")
-		}
 		if state.activeProcessIDs == nil {
 			t.Fatal("activeProcessIDs is nil")
 		}

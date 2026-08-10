@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -13,19 +14,15 @@ import (
 	"time"
 )
 
+const maxLinesPerRead = 1000
+
 var (
 	connectRegex     = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+CONNECT:\s+Client\s+"([^"]+)"`)
 	loginOKRegex     = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+LOGIN:\s+Client\s+"([^"]+)"`)
-	loginFailRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
+	loginFailRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]*)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
 	uploadOKRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+UPLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
 	downloadOKRegex  = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+DOWNLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
 	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\].*FTP\s+response:.*"530\s+`)
-
-	timestampRegexYMD     = regexp.MustCompile(`(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})`)
-	timestampRegexSyslog  = regexp.MustCompile(`(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})`)
-	timestampRegexSyslog2 = regexp.MustCompile(`(\w{3} \w{3} \d{2} \d{2}:\d{2}:\d{2} \d{4})`)
-	timestampRegexDMY     = regexp.MustCompile(`(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})`)
-	timestampRegexYSlash  = regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})`)
 )
 
 type ExporterState struct {
@@ -34,13 +31,11 @@ type ExporterState struct {
 
 	totalBytesUploaded   int64
 	totalBytesDownloaded int64
-	lastBytesTransferred int64
 
 	vsftpLogPosition int64
 
 	clientLastActivity map[string]time.Time
 	clientConnectTimes map[string]time.Time
-	userClientMapping  map[string]string
 	activeProcessIDs   map[string]time.Time
 	clientLastConnect  map[string]time.Time
 
@@ -54,7 +49,6 @@ func NewExporterState() *ExporterState {
 		lastProcessedTime:  now,
 		clientLastActivity: make(map[string]time.Time),
 		clientConnectTimes: make(map[string]time.Time),
-		userClientMapping:  make(map[string]string),
 		activeProcessIDs:   make(map[string]time.Time),
 		clientLastConnect:  make(map[string]time.Time),
 	}
@@ -73,22 +67,37 @@ func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([
 
 	var command string
 	if startPosition > 0 {
-		command = fmt.Sprintf("dd if='%s' bs=1 skip=%d 2>/dev/null", filePath, startPosition)
+		command = fmt.Sprintf("s=$(stat -c %%s '%s' 2>/dev/null || echo 0); if [ \"$s\" -lt %d ]; then echo ROTATED; cat '%s' 2>/dev/null | head -n %d; else echo OK; tail -c +%d '%s' 2>/dev/null | head -n %d; fi", filePath, startPosition, filePath, maxLinesPerRead, startPosition+1, filePath, maxLinesPerRead)
 	} else {
-		command = fmt.Sprintf("cat '%s'", filePath)
+		command = fmt.Sprintf("echo OK; cat '%s' 2>/dev/null | head -n %d", filePath, maxLinesPerRead)
 	}
 
-	output, err := sshMgr.Execute(command)
+	rawOutput, err := sshMgr.Execute(command)
 	if err != nil {
 		return nil, 0, fmt.Errorf("执行SSH命令失败: %w", err)
 	}
 
-	lines := strings.Split(output, "\n")
+	header, content, _ := strings.Cut(rawOutput, "\n")
+	if header == "ROTATED" {
+		slog.Warn("检测到远程日志轮转，从头开始读取", "last_position", startPosition, "path", filePath)
+		startPosition = 0
+	}
+
+	hasTrailingNewline := strings.HasSuffix(content, "\n")
+	lines := strings.Split(content, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 
-	newPosition := startPosition + int64(len(output))
+	consumedBytes := int64(len(content))
+	if !hasTrailingNewline && len(lines) > 0 {
+		// 末行没有换行符，说明末行不完整，暂不消费末行
+		lastLineLen := int64(len(lines[len(lines)-1]))
+		lines = lines[:len(lines)-1]
+		consumedBytes -= lastLineLen
+	}
+
+	newPosition := startPosition + consumedBytes
 	slog.Debug("SSH读取文件成功", "lines", len(lines), "position", newPosition)
 	return lines, newPosition, nil
 }
@@ -115,15 +124,26 @@ func readLocalFile(filePath string, startPosition int64) ([]string, int64, error
 
 	var lines []string
 	bytesRead := int64(0)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		lines = append(lines, line)
-		bytesRead += int64(len(scanner.Bytes())) + 1
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, 0, fmt.Errorf("读取文件失败: %w", err)
+	reader := bufio.NewReader(file)
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if err == io.EOF && !strings.HasSuffix(line, "\n") {
+				// EOF 且末行没有换行符，说明日志尚在写入中，暂不消费该半行
+				break
+			}
+			lines = append(lines, strings.TrimRight(line, "\r\n"))
+			bytesRead += int64(len(line))
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, 0, fmt.Errorf("读取文件失败: %w", err)
+		}
+		if len(lines) >= maxLinesPerRead {
+			break
+		}
 	}
 
 	newPosition := startPosition + bytesRead
@@ -132,7 +152,8 @@ func readLocalFile(filePath string, startPosition int64) ([]string, int64, error
 
 func parseStandardXferlog(line string) (eventTime time.Time, direction string, clientIP string, fileSize int64, filePath string, transferTime int, username string, completed bool) {
 	fields := strings.Fields(line)
-	if len(fields) < 18 {
+	n := len(fields)
+	if n < 18 {
 		return time.Time{}, "", "", 0, "", 0, "", false
 	}
 
@@ -143,10 +164,11 @@ func parseStandardXferlog(line string) (eventTime time.Time, direction string, c
 	transferTimeStr := fields[5]
 	clientIP = fields[6]
 	fileSizeStr := fields[7]
-	filePath = fields[8]
-	direction = fields[11]
-	username = fields[13]
-	completionStatus := fields[17]
+
+	filePath = strings.Join(fields[8:n-9], " ")
+	direction = fields[n-7]
+	username = fields[n-5]
+	completionStatus := fields[n-1]
 
 	if t, err := strconv.Atoi(transferTimeStr); err == nil {
 		transferTime = t
@@ -174,7 +196,7 @@ func parseXferlogTimestamp(timeStr string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("无法解析xferlog时间戳: %s", timeStr)
 }
 
-func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *SSHManager) error {
+func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error {
 	slog.Debug("开始解析FTP日志文件", "path", logPath, "position", state.lastPosition)
 
 	lines, newPosition, err := readRemoteFile(sshMgr, logPath, state.lastPosition)
@@ -186,7 +208,6 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 	uploadCount := 0
 	downloadCount := 0
 	incompleteCount := 0
-	const maxLinesPerRead = 1000
 
 	totalBytesThisRound := int64(0)
 	var earliestTime, latestTime time.Time
@@ -203,7 +224,7 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 
 		linesProcessed++
 
-		eventTime, direction, clientIP, fileSize, _, transferTime, username, completed := parseStandardXferlog(line)
+		eventTime, direction, clientIP, fileSize, _, transferTime, _, completed := parseStandardXferlog(line)
 		if direction == "" {
 			continue
 		}
@@ -249,9 +270,6 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 		if clientIP != "" {
 			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
 		}
-		if username != "" {
-			userConnectionsTotal.WithLabelValues(username).Inc()
-		}
 		if transferTime > 0 {
 			transferDurationSeconds.Observe(float64(transferTime))
 		}
@@ -265,6 +283,8 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 		if logTimeDiff > 0 {
 			bandwidthUsage.Set(float64(totalBytesThisRound) / logTimeDiff)
 		}
+	} else if totalBytesThisRound == 0 {
+		bandwidthUsage.Set(0)
 	}
 
 	// 平均传输速度：基于程序运行以来的总量
@@ -273,8 +293,6 @@ func parseFTPLog(config *Config, logPath string, state *ExporterState, sshMgr *S
 	if totalBytes > 0 && programRunTime > 0 {
 		averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 	}
-
-	state.lastBytesTransferred += totalBytesThisRound
 
 	slog.Debug("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount, "incomplete", incompleteCount)
 	return nil
@@ -301,6 +319,10 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 	currentTime := time.Now()
 
 	for _, line := range lines {
+		if linesProcessed >= maxLinesPerRead {
+			break
+		}
+
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -351,7 +373,6 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			ftpLoginTime.Set(float64(eventTime.Unix()))
 
 			state.clientLastActivity[clientIP] = eventTime
-			state.userClientMapping[username] = clientIP
 			state.activeProcessIDs[processID] = eventTime
 
 			if connectTime, exists := state.clientConnectTimes[clientIP]; exists {
@@ -383,11 +404,13 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
 			clientIP := matches[4]
 			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-				ftpUploadTotal.Inc()
-				uploadBytesTotal.Add(float64(bytes))
 				state.totalBytesUploaded += bytes
-				if clientIP != "" {
-					clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+				if config.LogFilePath == "" {
+					ftpUploadTotal.Inc()
+					uploadBytesTotal.Add(float64(bytes))
+					if clientIP != "" {
+						clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+					}
 				}
 			}
 			continue
@@ -397,11 +420,13 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
 			clientIP := matches[4]
 			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-				ftpDownloadTotal.Inc()
-				downloadBytesTotal.Add(float64(bytes))
 				state.totalBytesDownloaded += bytes
-				if clientIP != "" {
-					clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+				if config.LogFilePath == "" {
+					ftpDownloadTotal.Inc()
+					downloadBytesTotal.Add(float64(bytes))
+					if clientIP != "" {
+						clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+					}
 				}
 			}
 			continue
@@ -410,6 +435,9 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		// 530 认证错误响应
 		if ftpResponseRegex.MatchString(line) {
 			authenticationErrorsTotal.Inc()
+			if strings.Contains(line, "maximum number of clients") {
+				maxConnectionsReachedTotal.Inc()
+			}
 			continue
 		}
 	}
@@ -431,29 +459,6 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		"logins_fail", loginFailCount,
 	)
 	return nil
-}
-
-func extractTimestamp(line string) int64 {
-	timeFormats := []struct {
-		regex  *regexp.Regexp
-		layout string
-	}{
-		{timestampRegexYMD, "2006-01-02 15:04:05"},
-		{timestampRegexSyslog, "Mon Jan _2 15:04:05 2006"},
-		{timestampRegexSyslog2, "Mon Jan 02 15:04:05 2006"},
-		{timestampRegexDMY, "02/01/2006 15:04:05"},
-		{timestampRegexYSlash, "2006/01/02 15:04:05"},
-	}
-
-	for _, format := range timeFormats {
-		if match := format.regex.FindString(line); match != "" {
-			if t, err := time.ParseInLocation(format.layout, match, time.Local); err == nil {
-				return t.Unix()
-			}
-		}
-	}
-
-	return time.Now().Unix()
 }
 
 func parseVsftpdTimestamp(timeStr string) (time.Time, error) {
@@ -482,6 +487,7 @@ func updateUniqueClientsMetric(state *ExporterState, currentTime time.Time) {
 		} else {
 			delete(state.clientLastActivity, clientIP)
 			delete(state.clientConnectTimes, clientIP)
+			delete(state.clientLastConnect, clientIP)
 		}
 	}
 
@@ -503,7 +509,7 @@ func updateActiveProcessesMetric(state *ExporterState, currentTime time.Time) {
 	activeProcesses.Set(float64(activeProcessCount))
 }
 
-func checkConnections(config *Config, state *ExporterState, sshMgr *SSHManager) error {
+func checkConnections(config *Config, sshMgr *SSHManager) error {
 	var output string
 
 	if sshMgr != nil {

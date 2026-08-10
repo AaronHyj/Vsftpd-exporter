@@ -215,6 +215,14 @@ curl http://localhost:9101/health
 }
 ```
 
+- `status`：`healthy` 表示最近一次 FTP 登录探测成功，`degraded` 表示探测失败（FTP 服务不可达或登录失败）。
+- `last_check_time`：最近一次 FTP 探测发生的时间。
+
+> **注意（对 vsftpd 服务端的影响）**：exporter 会使用配置的真实账号周期性地执行 FTP 登录探测（`vsftp_login_success` 指标）。每次探测都会在服务端产生一次真实的连接与认证，占用连接配额并出现在 vsftpd 日志中。建议：
+> 1. 为探测创建**专用的只读账号**，避免占用真实用户配额；
+> 2. 探测频率不要设置过小（`check_interval` 建议 ≥ 30 秒）；
+> 3. 探测本身已不再计入 `vsftp_failed_logins_total` / `vsftp_authentication_errors_total`，这些计数完全来自日志解析器对真实客户端事件的统计，避免与服务端日志重复计数。
+
 ### SSH 远程监控
 
 当需要监控远程服务器上的 vsftpd 时：
@@ -421,6 +429,8 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 ├── deploy/                    # 部署辅助
 │   ├── grafana-dashboard.json # Grafana 仪表板配置
 │   └── vsftpd-exporter.service # systemd 服务文件
+├── docs/                      # 文档
+│   └── bugrecord.md           # Bug 记录（审查发现与修复状态）
 ├── .github/workflows/         # GitHub Actions CI/CD
 │   ├── ci.yml                 # 持续集成
 │   └── release.yml            # 发布流程
@@ -479,10 +489,17 @@ topk(10, rate(vsftp_client_connections_total[5m]))
 ## 性能说明
 
 - 采用增量日志读取，每次只处理新增内容（最多 1000 行/轮次）
+- SSH 模式使用 `tail -c +N` 增量读取，替代逐字节 `dd bs=1`，显著降低远程主机 I/O 开销；支持远程日志轮转检测
+- SSH 命令执行带 10 秒超时，避免远程命令挂起阻塞采集
 - 预编译正则表达式，避免重复编译开销
-- 使用 `sync.RWMutex` 保护并发状态访问
 - 支持日志文件轮转检测
 - 典型资源占用：内存 < 50MB，CPU < 5%
+
+## 故障排除
+
+**同时启用 xferlog 与 vsftpd.log 时的计数说明**
+
+传输类指标（`vsftp_upload_total`、`vsftp_download_total`、`vsftp_upload_bytes_total`、`vsftp_download_bytes_total`、`vsftp_client_files_total`）以 xferlog 为权威来源；同时启用 vsftpd.log 时不会重复计数。`vsftp_user_connections_total` 按登录事件（OK LOGIN）计数，需要启用 vsftpd.log。
 
 ## 贡献指南
 

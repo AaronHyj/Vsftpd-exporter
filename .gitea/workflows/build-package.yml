@@ -1,0 +1,120 @@
+# Gitea CI/CD：构建、打包与发布
+#
+# 运行位置：Gitea 仓库 .gitea/workflows/（Gitea Actions 同时支持 .github/workflows/）
+#
+# 内存控制目标：单轮构建/测试峰值内存尽量控制在 200 MiB 以内，手段如下：
+#   - GOFLAGS=-p=1          只允许 Go 工具并行处理 1 个包（关键：编译/测试串行化）
+#   - GOMAXPROCS=1          限制 Go 运行时占用核数，抑制并行内存
+#   - CGO_ENABLED=0         关闭 cgo，减少链接器内存，产出静态二进制
+#   - GOMEMLIMIT=180MiB     软内存上限（Go 1.19+），GC 将尽力把堆压在上限附近
+#   - GOGC=30               更激进的 GC 频率，以少量 CPU 换取更低的峰值内存
+#   - 测试不使用 -race      race 检测内存开销约为常规的 3-5 倍
+#   - 多平台构建串行循环    同一时刻只有一个 go build 进程
+#   - 单 job 顺序执行       避免多 job 并发叠加内存
+
+name: Build & Package
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main, develop]
+
+env:
+  GOFLAGS: '-p=1'
+  GOMAXPROCS: '1'
+  CGO_ENABLED: '0'
+  GOMEMLIMIT: '180MiB'
+  GOGC: '30'
+
+jobs:
+  build-package:
+    name: 构建与打包
+    runs-on: default
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 检查 Go 环境
+        # 直接用 runner 上已安装的 Go，不做 setup-go 下载
+        run: go version
+
+      - name: 代码格式检查
+        run: test -z "$(gofmt -s -l .)"
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 单元测试
+        run: go test -p 1 -count=1 -cover ./...
+
+      - name: 提取版本号
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "VERSION=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 构建并打包多平台二进制
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          for pair in "linux-amd64:" "windows-amd64:.exe" "darwin-amd64:"; do
+            platform="${pair%%:*}"
+            ext="${pair#*:}"
+            out="vsftp-exporter-${platform}${ext}"
+            GOOS="${platform%%-*}" GOARCH="${platform##*-}" \
+              go build -trimpath -ldflags "-s -w -X main.appVersion=${VERSION}" \
+              -o "${out}" ./cmd
+            pkg="vsftp-exporter-${VERSION}-${platform}"
+            mkdir -p "${pkg}/configs" "${pkg}/deploy"
+            cp "${out}" "${pkg}/vsftp-exporter${ext}"
+            cp configs/config.example.json "${pkg}/configs/"
+            cp -r deploy/* "${pkg}/deploy/"
+            tar czf "${pkg}.tar.gz" "${pkg}"
+          done
+          ls -lh vsftp-exporter-*.tar.gz
+
+      - name: 上传构建产物
+        continue-on-error: true
+        uses: actions/upload-artifact@v3
+        with:
+          name: vsftp-exporter-${{ steps.version.outputs.VERSION }}
+          path: vsftp-exporter-*.tar.gz
+
+      - name: 创建或更新 Gitea Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          api="${{ github.server_url }}/api/v1"
+          repo="${{ github.repository }}"
+          tag="${GITHUB_REF_NAME}"
+          auth="Authorization: token ${GITHUB_TOKEN}"
+
+          extract_id() {
+            # 优先 jq；兜底取第一个 "id": 字段
+            jq -r '.id // empty' 2>/dev/null || \
+              grep -o '"id":[0-9]*' | head -1 | cut -d: -f2
+          }
+
+          existing="$(curl -sS -H "${auth}" "${api}/repos/${repo}/releases/tags/${tag}")"
+          release_id="$(printf '%s' "${existing}" | extract_id)"
+          if [ -z "${release_id}" ] || [ "${release_id}" = "null" ]; then
+            payload="{\"tag_name\":\"${tag}\",\"name\":\"vsftp-exporter ${VERSION}\",\"body\":\"Vsftpd exporter ${VERSION} 发布。\"}"
+            created="$(curl -sS -X POST -H "${auth}" -H "Content-Type: application/json" -d "${payload}" "${api}/repos/${repo}/releases")"
+            release_id="$(printf '%s' "${created}" | extract_id)"
+          fi
+          echo "release_id=${release_id}"
+
+          for f in vsftp-exporter-*.tar.gz; do
+            curl -sS -X POST -H "${auth}" -H "Content-Type: application/octet-stream" \
+              --data-binary "@${f}" \
+              "${api}/repos/${repo}/releases/${release_id}/assets?name=${f}"
+          done
