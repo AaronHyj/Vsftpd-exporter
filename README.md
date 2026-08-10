@@ -28,7 +28,7 @@ Vsftpd Exporter 通过以下方式采集监控数据：
 
 1. **FTP 连接探测** — 定期尝试登录 FTP 服务器，验证服务可用性
 2. **连接状态统计** — 通过 `ss -tnH` 统计 FTP 端口的连接状态（ESTABLISHED / CLOSE_WAIT 等）
-3. **xferlog 日志解析** — 增量读取标准 xferlog，提取上传/下载文件数、字节数、传输耗时、客户端 IP 等
+3. **xferlog 日志解析** — 增量读取标准 xferlog，提取上传/下载文件数、字节数、传输耗时、客户端 IP、文件后缀（如 ts/mp4/mkv）等
 4. **vsftpd.log 日志解析** — 增量读取 vsftpd 详细日志，提取 CONNECT/LOGIN 事件、用户活动、进程信息等
 5. **SSH 远程采集** — 支持通过 SSH 连接到远程服务器读取日志和执行 ss
 
@@ -40,6 +40,7 @@ Vsftpd Exporter 通过以下方式采集监控数据：
 - **传输统计**: 上传/下载文件数、字节数、传输耗时分布（Histogram）、平均传输速度、带宽使用率
 - **错误监控**: 登录失败、传输错误（按类型分类）、连接超时、认证错误、最大连接数限制
 - **用户与客户端分析**: 按用户名统计登录/连接数，按客户端 IP 统计连接/文件传输数
+- **文件类型统计**: 将 xferlog 中的文件按原始后缀统计（如 ts/mp4/mkv），展示指定时间段各后缀的传输文件数及速率
 - **高级检测**: 快速重连检测（30 秒内同 IP 重连）、连接到登录延迟分布、活跃进程数
 - **SSH 远程监控**: 通过 SSH 连接远程服务器读取日志文件和执行命令
 - **健康检查**: 提供 `/health` 端点，返回 JSON 格式的服务状态信息
@@ -332,6 +333,7 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_user_logins_total` | Counter | `username` | 按用户名统计的成功登录总数 |
 | `vsftp_user_connections_total` | Counter | `username` | 按用户名统计的连接总数 |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数 |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数，`file_type` 直接为小写后缀（如 `ts`/`mp4`/`mkv`），无后缀时为 `no_extension` |
 
 ### 高级监控指标（需启用 vsftpd.log）
 
@@ -428,6 +430,15 @@ sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
 
 # 目标目录不存在错误
 rate(vsftp_ftp_errors_total{reason="dir_not_found"}[5m])
+
+# 各后缀文件每分钟传输数（上传+下载）
+sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
+
+# ts 文件上传速率 (个/分钟)
+rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
+
+# 某时间段各后缀文件传输总数（例如近 1 小时）
+sum by (file_type) (increase(vsftp_files_by_type_total[1h]))
 ```
 
 ## CI/CD

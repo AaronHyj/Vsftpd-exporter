@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -181,6 +182,16 @@ func parseStandardXferlog(line string) (eventTime time.Time, direction string, c
 	return eventTime, direction, clientIP, fileSize, filePath, transferTime, username, completed
 }
 
+// extractFileExtension 提取文件路径的后缀（小写、不含点），无后缀时返回 "no_extension"，
+// 用于 vsftp_files_by_type_total 的 file_type 标签（直接展示原始后缀，如 ts/mp4/mkv）。
+func extractFileExtension(filePath string) string {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filepath.Base(filePath)), "."))
+	if ext == "" {
+		return "no_extension"
+	}
+	return ext
+}
+
 // parseXferlogTimestamp 解析 xferlog 时间戳格式: "Wed Oct 15 16:04:42 2025"
 func parseXferlogTimestamp(timeStr string) (time.Time, error) {
 	layouts := []string{
@@ -224,7 +235,7 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 
 		linesProcessed++
 
-		eventTime, direction, clientIP, fileSize, _, transferTime, _, completed := parseStandardXferlog(line)
+		eventTime, direction, clientIP, fileSize, filePath, transferTime, _, completed := parseStandardXferlog(line)
 		if direction == "" {
 			continue
 		}
@@ -270,6 +281,7 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 		if clientIP != "" {
 			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
 		}
+		filesByTypeTotal.WithLabelValues(extractFileExtension(filePath), dirLabel).Inc()
 		if transferTime > 0 {
 			transferDurationSeconds.Observe(float64(transferTime))
 		}

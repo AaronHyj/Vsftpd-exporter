@@ -1663,6 +1663,73 @@
       ],
       "title": "连接到登录延迟分位数",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "id": 105,
+      "panels": [],
+      "title": "📦 文件类型统计",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "按文件后缀统计的传输文件数速率（直接展示后缀，如 ts/mp4/mkv）",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "个/分钟",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 65
+      },
+      "id": 106,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (file_type) (rate(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60)",
+          "legendFormat": "{{file_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "各类型文件传输速率 (个/分钟)",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
