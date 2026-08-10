@@ -296,11 +296,26 @@ sudo systemctl enable --now vsftp-exporter
 
 | 指标名称 | 类型 | 标签 | 说明 |
 | -------- | ---- | ---- | ---- |
-| `vsftp_failed_logins_total` | Counter | - | 登录失败总次数 |
+| `vsftp_failed_logins_total` | Counter | - | 登录失败总次数（按 FAIL LOGIN 事件） |
 | `vsftp_transfer_errors_total` | Counter | `type` | 传输错误总数（upload/download/timeout） |
 | `vsftp_connection_timeouts_total` | Counter | - | 连接超时总次数 |
-| `vsftp_authentication_errors_total` | Counter | - | 认证错误总次数（530 错误） |
+| `vsftp_authentication_errors_total` | Counter | - | 认证错误总次数（仅统计 530 响应，已去除 FAIL LOGIN 重复计数） |
 | `vsftp_max_connections_reached_total` | Counter | - | 达到最大连接数限制次数 |
+| `vsftp_ftp_errors_total` | Counter | `reason` | FTP 协议错误按原因分类计数，`reason` 取值见下表 |
+
+`vsftp_ftp_errors_total` 的 `reason` 标签取值：
+
+| `reason` | 含义 | 典型 FTP 响应 |
+| -------- | ---- | ---- |
+| `auth_failed` | 认证失败（密码错误、用户不存在等） | `530 Login incorrect.` |
+| `max_connections` | 达到连接数上限被拒绝 | `421 Too many connections`、`530 Maximum number of clients reached` |
+| `dir_not_found` | 目标目录不存在 | `550 Failed to change directory.` |
+| `file_not_found` | 目标文件不存在 | `550 No such file or directory.` |
+| `permission_denied` | 权限不足 | `550 Permission denied.` |
+| `quota_exceeded` | 磁盘配额超限 | `552 Exceeded storage allocation.` |
+| `other` | 其他 4xx/5xx 错误 | - |
+
+> 说明：`vsftp_failed_logins_total` 按 `FAIL LOGIN` 事件计数，`vsftp_authentication_errors_total` 仅按 `530` 响应行计数。vsftpd 对同一次失败登录会同时输出 `FAIL LOGIN` 与 `530 FTP response` 两行，二者不再重复累加认证错误。
 
 ### 客户端和用户统计指标（需启用 vsftpd.log）
 
