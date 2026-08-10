@@ -89,6 +89,11 @@ var (
 		Help: "Total number of times max connections limit was reached.",
 	})
 
+	ftpErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vsftp_ftp_errors_total",
+		Help: "Total number of FTP protocol errors by reason.",
+	}, []string{"reason"})
+
 	bandwidthUsage = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "vsftp_bandwidth_usage_bytes_per_second",
 		Help: "Current bandwidth usage in bytes per second.",
@@ -155,6 +160,7 @@ func init() {
 		connectionTimeoutsTotal,
 		authenticationErrorsTotal,
 		maxConnectionsReachedTotal,
+		ftpErrorsTotal,
 		bandwidthUsage,
 		clientConnectionsTotal,
 		uniqueClients,
