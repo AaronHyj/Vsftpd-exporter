@@ -467,3 +467,43 @@ Sun Aug  9 16:34:54 2026 [pid 1237] [ftpuser] FTP response: Client "192.168.1.10
 		t.Errorf("ftpErrorsTotal{dir_not_found} 增量 = %v, 期望 1", got)
 	}
 }
+
+func TestParseSSOutputPeerMatchAndDedup(t *testing.T) {
+	const port = "6069"
+	// 模拟用户环境：客户端与服务端同主机，ss 输出同时出现客户端侧与
+	// 服务端侧 socket，且 v4/v6-mapped 两种表示形式；IPv4 与 ::ffff: 形式需去重。
+	output := strings.Join([]string{
+		`CLOSE-WAIT 15     0        ::ffff:172.25.234.200:43510                ::ffff:172.25.234.200:6069`,
+		`CLOSE-WAIT 15     0        ::ffff:172.25.234.200:43568                ::ffff:172.25.234.200:6069`,
+		`ESTAB      0      0        172.25.234.200:6069                        172.25.234.161:50699`,
+		`ESTAB      0      0        ::ffff:172.25.234.200:43510                 ::ffff:172.25.234.200:6069`,
+		`ESTAB      0      0        172.25.234.200:6069                        ::ffff:172.25.234.200:43510`,
+		`TIME-WAIT  0      0        172.25.234.200:6069                        172.25.234.161:50701`,
+		`ESTAB      0      0        172.25.234.200:45001                        172.25.234.161:3306`,
+		`ESTAB      0      0        172.25.234.161:45000                        172.25.234.200:8080`,
+	}, "\n")
+
+	total, established, closeWait := parseSSOutput(output, port)
+	// 唯一连接: 2×CLOSE-WAIT(客户端侧) + 外部 ESTAB + 同机连接(两次出现去重为1) + TIME-WAIT
+	if total != 4 {
+		t.Errorf("total = %d, 期望 4（去重后唯一连接数）", total)
+	}
+	if established != 1 {
+		t.Errorf("established = %d, 期望 1", established)
+	}
+	if closeWait != 2 {
+		t.Errorf("closeWait = %d, 期望 2", closeWait)
+	}
+}
+
+func TestParseSSOutputNoMatch(t *testing.T) {
+	output := strings.Join([]string{
+		`ESTAB      0      0        172.25.234.200:45001                        172.25.234.161:3306`,
+		`SYN-SENT   0      1        172.25.234.200:45002                        172.25.234.161:80`,
+		``,
+	}, "\n")
+	total, established, closeWait := parseSSOutput(output, "6069")
+	if total != 0 || established != 0 || closeWait != 0 {
+		t.Errorf("不应匹配任何连接: total=%d established=%d closeWait=%d", total, established, closeWait)
+	}
+}

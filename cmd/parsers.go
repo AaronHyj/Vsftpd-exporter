@@ -607,8 +607,13 @@ func checkConnections(config *Config, sshMgr *SSHManager) error {
 }
 
 // parseSSOutput parses ss -tnH output and counts connections matching the given FTP port.
+// A line matches when either the local or the peer address ends with the FTP port,
+// covering server-side sockets (local = FTP port) and client-side sockets on the same
+// host (peer = FTP port). Each TCP connection is deduplicated by its (local, peer)
+// address pair so that a single connection observed from both sockets is counted once.
 func parseSSOutput(output string, ftpPort string) (total, established, closeWait int) {
 	portSuffix := ":" + ftpPort
+	seen := make(map[string]struct{})
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -620,9 +625,15 @@ func parseSSOutput(output string, ftpPort string) (total, established, closeWait
 		}
 		state := fields[0]
 		localAddr := fields[3]
-		if !strings.HasSuffix(localAddr, portSuffix) {
+		peerAddr := fields[4]
+		if !strings.HasSuffix(localAddr, portSuffix) && !strings.HasSuffix(peerAddr, portSuffix) {
 			continue
 		}
+		key := ssConnKey(ssNormalizeAddr(localAddr), ssNormalizeAddr(peerAddr))
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		total++
 		switch state {
 		case "ESTAB":
@@ -632,4 +643,20 @@ func parseSSOutput(output string, ftpPort string) (total, established, closeWait
 		}
 	}
 	return
+}
+
+// ssNormalizeAddr normalizes an address so IPv4-mapped IPv6 endpoints
+// (e.g. "::ffff:172.25.234.200:6069") and their plain IPv4 form
+// ("172.25.234.200:6069") deduplicate as the same endpoint.
+func ssNormalizeAddr(addr string) string {
+	return strings.TrimPrefix(addr, "::ffff:")
+}
+
+// ssConnKey returns a canonical key for a TCP connection so that the same
+// connection observed from either socket side (local/peer swapped) dedupes.
+func ssConnKey(a, b string) string {
+	if a < b {
+		return a + "|" + b
+	}
+	return b + "|" + a
 }
