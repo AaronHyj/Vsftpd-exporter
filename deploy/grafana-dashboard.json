@@ -1234,6 +1234,11 @@
           "expr": "rate(vsftp_connection_timeouts_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
           "legendFormat": "连接超时",
           "refId": "C"
+        },
+        {
+          "expr": "sum(rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\"}[5m])) * 60",
+          "legendFormat": "传输错误",
+          "refId": "D"
         }
       ],
       "title": "错误速率趋势 (次/分钟)",
