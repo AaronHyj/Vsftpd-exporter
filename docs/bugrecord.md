@@ -298,7 +298,7 @@
 
 **修复**：
 1. `authenticationErrorsTotal` 仅由 `530` 响应行递增，`FAIL LOGIN` 分支只保留 `failedLoginsTotal`（登录尝试次数）。
-2. FTP 响应解析泛化为任意 `4xx/5xx`，新增 `vsftp_ftp_errors_total{reason}` 按原因分类计数，`reason` 取值：`auth_failed` / `max_connections` / `dir_not_found` / `file_not_found` / `permission_denied` / `quota_exceeded` / `other`。
+2. FTP 响应解析泛化为任意 `4xx/5xx`，新增 `vsftp_ftp_errors_total{reason}` 按原因分类计数，`reason` 取值：`auth_failed` / `max_connections` / `service_unavailable` / `data_connection_error` / `command_error` / `dir_not_found` / `file_not_found` / `permission_denied` / `quota_exceeded` / `file_name_not_allowed` / `other`。
 3. `max_connections` 分类覆盖原 `530 ... maximum number of clients` 及 `421 ... too many connections` 变体。
 
 ## 已知特性说明

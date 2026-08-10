@@ -308,8 +308,6 @@ func classifyFTPError(code, message string) string {
 		return "max_connections"
 	case code == "530":
 		return "auth_failed"
-	case code == "552":
-		return "quota_exceeded"
 	case strings.Contains(msg, "permission denied"),
 		strings.Contains(msg, "not allowed"),
 		strings.Contains(msg, "denied"):
@@ -321,8 +319,22 @@ func classifyFTPError(code, message string) string {
 		return "dir_not_found"
 	case strings.Contains(msg, "no such file"),
 		strings.Contains(msg, "file not found"),
-		strings.Contains(msg, "cannot find the file"):
+		strings.Contains(msg, "cannot find the file"),
+		strings.Contains(msg, "not a regular file"),
+		strings.Contains(msg, "failed to open file"),
+		strings.Contains(msg, "can't open file"),
+		strings.Contains(msg, "cannot open file"):
 		return "file_not_found"
+	case code == "552":
+		return "quota_exceeded"
+	case code == "553":
+		return "file_name_not_allowed"
+	case code == "421":
+		return "service_unavailable"
+	case code == "425", code == "426", code == "450", code == "451":
+		return "data_connection_error"
+	case code == "500", code == "501", code == "502", code == "503", code == "504":
+		return "command_error"
 	default:
 		return "other"
 	}

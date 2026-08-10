@@ -309,10 +309,14 @@ sudo systemctl enable --now vsftp-exporter
 | -------- | ---- | ---- |
 | `auth_failed` | 认证失败（密码错误、用户不存在等） | `530 Login incorrect.` |
 | `max_connections` | 达到连接数上限被拒绝 | `421 Too many connections`、`530 Maximum number of clients reached` |
+| `service_unavailable` | 服务不可用（关闭控制连接） | `421 Service not available, closing control connection.` |
+| `data_connection_error` | 数据连接建立/传输失败 | `425 Can't open data connection.`、`426 Connection closed; transfer aborted.`、`450/451` |
+| `command_error` | 客户端命令语法/未实现/顺序错误 | `500 Unknown command.`、`501`、`502`、`503 Bad sequence of commands.`、`504` |
 | `dir_not_found` | 目标目录不存在 | `550 Failed to change directory.` |
-| `file_not_found` | 目标文件不存在 | `550 No such file or directory.` |
+| `file_not_found` | 目标文件不存在或无法打开 | `550 No such file or directory.`、`550 Not a regular file.` |
 | `permission_denied` | 权限不足 | `550 Permission denied.` |
 | `quota_exceeded` | 磁盘配额超限 | `552 Exceeded storage allocation.` |
+| `file_name_not_allowed` | 文件名/创建操作不允许 | `553 Could not create file.` |
 | `other` | 其他 4xx/5xx 错误 | - |
 
 > 说明：`vsftp_failed_logins_total` 按 `FAIL LOGIN` 事件计数，`vsftp_authentication_errors_total` 仅按 `530` 响应行计数。vsftpd 对同一次失败登录会同时输出 `FAIL LOGIN` 与 `530 FTP response` 两行，二者不再重复累加认证错误。
