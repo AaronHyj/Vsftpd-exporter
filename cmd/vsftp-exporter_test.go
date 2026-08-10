@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -505,5 +506,64 @@ func TestParseSSOutputNoMatch(t *testing.T) {
 	total, established, closeWait := parseSSOutput(output, "6069")
 	if total != 0 || established != 0 || closeWait != 0 {
 		t.Errorf("不应匹配任何连接: total=%d established=%d closeWait=%d", total, established, closeWait)
+	}
+}
+
+func TestExtractFileExtension(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{"/data/movie/你好世界.mp4", "mp4"},
+		{"/media/series/ep01.mkv", "mkv"},
+		{"/media/live/live.ts", "ts"},
+		{"/upload/song.MP3", "mp3"},
+		{"/pics/photo.JPG", "jpg"},
+		{"/backup/data.tar.gz", "gz"},
+		{"/docs/report.pdf", "pdf"},
+		{"/scripts/deploy.sh", "sh"},
+		{"/app/installer.exe", "exe"},
+		{"/tmp/noextfile", "no_extension"},
+		{"/data/unknown.xyz", "xyz"},
+		{"/data/dir.with.dots/file", "no_extension"},
+		{"", "no_extension"},
+	}
+	for _, tc := range tests {
+		if got := extractFileExtension(tc.path); got != tc.expected {
+			t.Errorf("extractFileExtension(%q) = %q, 期望 %q", tc.path, got, tc.expected)
+		}
+	}
+}
+
+func TestParseFTPLogFilesByTypeCounter(t *testing.T) {
+	before := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload"))
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	log := `Wed Aug  5 10:00:00 2026 0 172.25.234.200 5242880 /media/abc.mp4 b _ i a ostore ftp 0 * c
+Wed Aug  5 10:00:01 2026 0 172.25.234.200 2048 /docs/readme.txt b _ i a ostore ftp 0 * c
+Wed Aug  5 10:00:02 2026 0 172.25.234.200 4096 /media/ep01.mkv b _ o a ostore ftp 0 * c
+Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore ftp 0 * c
+`
+	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	state := NewExporterState()
+	state.lastProcessedTime = time.Now()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("parseFTPLog 失败: %v", err)
+	}
+
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 1 {
+		t.Errorf("mp4/upload 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("txt", "upload")) - before; got != 1 {
+		t.Errorf("txt/upload 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mkv", "download")) - before; got != 1 {
+		t.Errorf("mkv/download 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("xyz", "upload")) - before; got != 1 {
+		t.Errorf("xyz/upload 增量 = %v, 期望 1", got)
 	}
 }

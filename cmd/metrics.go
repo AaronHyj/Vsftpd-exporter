@@ -139,6 +139,11 @@ var (
 		Name: "vsftp_client_files_total",
 		Help: "Total number of files transferred by client IP address and direction.",
 	}, []string{"client_ip", "direction"})
+
+	filesByTypeTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vsftp_files_by_type_total",
+		Help: "Total number of files transferred by file extension and direction.",
+	}, []string{"file_type", "direction"})
 )
 
 func init() {
@@ -170,5 +175,6 @@ func init() {
 		rapidReconnectionsTotal,
 		activeProcesses,
 		clientFilesTotal,
+		filesByTypeTotal,
 	)
 }

@@ -28,7 +28,7 @@ Vsftpd Exporter collects monitoring data in the following ways:
 
 1. **FTP login probe** — periodically attempts to log in to the FTP server to verify availability
 2. **Connection state statistics** — inspects FTP port connection states (ESTABLISHED / CLOSE_WAIT, etc.) via `ss -tnH`
-3. **xferlog parsing** — incrementally reads the standard xferlog to extract upload/download file counts, bytes, transfer durations, and client IPs
+3. **xferlog parsing** — incrementally reads the standard xferlog to extract upload/download file counts, bytes, transfer durations, client IPs, and file extensions (e.g. ts/mp4/mkv)
 4. **vsftpd.log parsing** — incrementally reads the vsftpd verbose log to extract CONNECT/LOGIN events, user activity, and process information
 5. **SSH remote collection** — supports connecting to a remote server over SSH to read logs and run `ss`
 
@@ -40,6 +40,7 @@ All collection tasks run periodically at the `check_interval`.
 - **Transfer statistics**: upload/download file counts, bytes, transfer duration distribution (Histogram), average transfer speed, and bandwidth usage
 - **Error monitoring**: failed logins, transfer errors (by type), connection timeouts, authentication errors, and max-connection limit hits
 - **User & client analytics**: logins/connections per username, connections/file transfers per client IP
+- **File type statistics**: counts transferred files by their raw extension (e.g. ts/mp4/mkv) and shows counts and rates per extension over a time range
 - **Advanced detection**: rapid reconnection detection (same IP reconnecting within 30 s), connect-to-login latency distribution, active process count
 - **SSH remote monitoring**: reads log files and executes commands on a remote server over SSH
 - **Health check**: provides a `/health` endpoint returning service status as JSON
@@ -332,6 +333,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 | `vsftp_user_logins_total` | Counter | `username` | Total successful logins per username |
 | `vsftp_user_connections_total` | Counter | `username` | Total connections per username |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction; `file_type` is the lowercase extension directly (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one |
 
 ### Advanced Metrics (requires vsftpd.log)
 
@@ -428,6 +430,15 @@ sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
 
 # Directory-not-found errors
 rate(vsftp_ftp_errors_total{reason="dir_not_found"}[5m])
+
+# Files transferred per extension per minute (upload + download)
+sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
+
+# ts upload rate (files per minute)
+rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
+
+# Total files transferred per extension in a time range (e.g. last 1 hour)
+sum by (file_type) (increase(vsftp_files_by_type_total[1h]))
 ```
 
 ## CI/CD
