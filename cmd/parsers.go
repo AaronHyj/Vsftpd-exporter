@@ -22,7 +22,7 @@ var (
 	loginFailRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]*)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
 	uploadOKRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+UPLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
 	downloadOKRegex  = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+DOWNLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
-	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\].*FTP\s+response:.*"530\s+`)
+	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\].*FTP\s+response:\s+Client\s+"([^"]*)",\s+"([^"]*)"`)
 )
 
 type ExporterState struct {
@@ -298,6 +298,48 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 	return nil
 }
 
+// classifyFTPError 根据 FTP 响应码和消息文本将错误归类，用于 vsftp_ftp_errors_total 的 reason 标签。
+func classifyFTPError(code, message string) string {
+	msg := strings.ToLower(message)
+	switch {
+	case strings.Contains(msg, "maximum number of clients"),
+		strings.Contains(msg, "too many connections"),
+		strings.Contains(msg, "too many clients"):
+		return "max_connections"
+	case code == "530":
+		return "auth_failed"
+	case strings.Contains(msg, "permission denied"),
+		strings.Contains(msg, "not allowed"),
+		strings.Contains(msg, "denied"):
+		return "permission_denied"
+	case strings.Contains(msg, "change directory"),
+		strings.Contains(msg, "directory not found"),
+		strings.Contains(msg, "no such directory"),
+		strings.Contains(msg, "cannot find the path"):
+		return "dir_not_found"
+	case strings.Contains(msg, "no such file"),
+		strings.Contains(msg, "file not found"),
+		strings.Contains(msg, "cannot find the file"),
+		strings.Contains(msg, "not a regular file"),
+		strings.Contains(msg, "failed to open file"),
+		strings.Contains(msg, "can't open file"),
+		strings.Contains(msg, "cannot open file"):
+		return "file_not_found"
+	case code == "552":
+		return "quota_exceeded"
+	case code == "553":
+		return "file_name_not_allowed"
+	case code == "421":
+		return "service_unavailable"
+	case code == "425", code == "426", code == "450", code == "451":
+		return "data_connection_error"
+	case code == "500", code == "501", code == "502", code == "503", code == "504":
+		return "command_error"
+	default:
+		return "other"
+	}
+}
+
 func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr *SSHManager) error {
 	if logPath == "" {
 		return nil
@@ -392,8 +434,8 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			}
 			clientIP := matches[4]
 
+			// 认证错误次数由下方 FTP response 530 行统计，避免同一事件重复计数
 			failedLoginsTotal.Inc()
-			authenticationErrorsTotal.Inc()
 			loginFailCount++
 
 			state.clientLastActivity[clientIP] = eventTime
@@ -432,10 +474,24 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			continue
 		}
 
-		// 530 认证错误响应
-		if ftpResponseRegex.MatchString(line) {
-			authenticationErrorsTotal.Inc()
-			if strings.Contains(line, "maximum number of clients") {
+		// FTP 协议错误响应（4xx / 5xx）
+		if matches := ftpResponseRegex.FindStringSubmatch(line); matches != nil {
+			parts := strings.SplitN(matches[4], " ", 2)
+			code := parts[0]
+			message := ""
+			if len(parts) > 1 {
+				message = parts[1]
+			}
+			if !strings.HasPrefix(code, "4") && !strings.HasPrefix(code, "5") {
+				continue
+			}
+
+			reason := classifyFTPError(code, message)
+			ftpErrorsTotal.WithLabelValues(reason).Inc()
+			if code == "530" {
+				authenticationErrorsTotal.Inc()
+			}
+			if reason == "max_connections" {
 				maxConnectionsReachedTotal.Inc()
 			}
 			continue

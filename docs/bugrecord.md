@@ -42,6 +42,7 @@
 | BUG-027 | 中 | `cmd/parsers.go` parseFTPLog | 当本轮无传输日志（0 字节传输）时，`bandwidthUsage` 仪表盘指标未被重置为 0，导致带宽指标永久停留在历史非零峰值 | 已修复 |
 | BUG-028 | 中 | `cmd/parsers.go` readLocalFile / readRemoteFile | 在读取到达文件末尾（EOF）时若 vsftpd 正在写入半行日志（无换行符 `\n`），会将半行日志消费并推进文件 position，导致下一轮日志拼接断裂并丢失事件 | 已修复 |
 | BUG-029 | 低 | `cmd/parsers.go` loginFailRegex | 用户名中括号正则表达式使用 `+` (`\[([^\]]+)\]`)，导致匿名或未提供用户名失败登录产生 `[]` 时无法匹配 | 已修复 |
+| BUG-030 | 中 | `cmd/parsers.go` parseVsftpdLog | 同一失败登录的 `FAIL LOGIN` 与 `FTP response: 530` 两行均递增 `authenticationErrorsTotal`，认证错误被重复计数 | 已修复 |
 
 ## 详细说明
 
@@ -289,11 +290,21 @@
 
 **修复**：将 `\[([^\]]+)\]` 修改为 `\[([^\]]*)\]`，允许中括号内部为空字符串。
 
+### BUG-030：认证错误重复计数（中）
+
+**位置**：`cmd/parsers.go` parseVsftpdLog
+
+**问题**：vsftpd 对同一次失败登录会同时输出 `FAIL LOGIN` 事件行与 `FTP response: "530 ..."` 响应行。原实现两处都递增 `vsftp_authentication_errors_total`，导致认证错误被计 2 次。
+
+**修复**：
+1. `authenticationErrorsTotal` 仅由 `530` 响应行递增，`FAIL LOGIN` 分支只保留 `failedLoginsTotal`（登录尝试次数）。
+2. FTP 响应解析泛化为任意 `4xx/5xx`，新增 `vsftp_ftp_errors_total{reason}` 按原因分类计数，`reason` 取值：`auth_failed` / `max_connections` / `service_unavailable` / `data_connection_error` / `command_error` / `dir_not_found` / `file_not_found` / `permission_denied` / `quota_exceeded` / `file_name_not_allowed` / `other`。
+3. `max_connections` 分类覆盖原 `530 ... maximum number of clients` 及 `421 ... too many connections` 变体。
+
 ## 已知特性说明
 
 | 编号 | 说明 |
 |------|------|
-| KNOWN-001 | `vsftp_authentication_errors_total` 在同一失败登录同时产生 `FAIL LOGIN` 事件与 `FTP response: 530` 日志行时会被递增两次（两种信号各计一次）。这是既有行为，告警阈值需按此口径设置，未做改动以免影响已有告警。 |
 | KNOWN-002 | `vsftp_bandwidth_usage_bytes_per_second` 语义有限：单事件轮次（时间跨度=0）不更新；事件时间跨度大（日志空档）时会算出一个偏小的"平均带宽"。建议以 PromQL `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m])` 为主。 |
 | KNOWN-003 | `vsftp_average_transfer_speed_bytes_per_second` 的除数是程序总运行时长（`state.lastProcessedTime` 仅在启动时初始化、不再更新），即"总字节/总运行时长"；字段名 `lastProcessedTime` 有误导性。 |
 | KNOWN-004 | 登录探测的成功事件仍会计入日志派生态指标（`vsftp_user_logins_total`、`vsftp_ftp_login_total`、`vsftp_user_connections_total`、`vsftp_client_connections_total` 等）。需使用专用探测账号或在部署侧排除 exporter 自身 IP 才能完全消除（承接 BUG-001 遗留建议）。 |
