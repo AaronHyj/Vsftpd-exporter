@@ -389,6 +389,7 @@ rule_files:
 
 - 服务状态概览：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、活跃进程数
 - 传输统计：上传/下载文件总数、登录总次数、最后登录时间、连接状态趋势图、传输速率图 (MB/s)
+- 错误监控：登录失败/认证错误/连接超时/最大连接数限制/快速重连，以及按 `reason` 分类的 FTP 协议错误速率
 
 仪表板特性：
 
@@ -398,7 +399,7 @@ rule_files:
 
 ### 导入方式
 
-登录 Grafana → 点击 "+" → "Import" → 上传 `deploy/grafana-dashboard.json` → 选择 Prometheus 数据源
+登录 Grafana → 点击 "+" → "Import" → 上传 `deploy/grafana-dashboard.json` → 在数据源选择器中选中你的 Prometheus 实例（仪表盘通过 `${DS_PROMETHEUS}` 变量引用数据源，不依赖固定名称）
 
 ### 常用 PromQL 查询
 

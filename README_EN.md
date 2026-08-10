@@ -389,6 +389,7 @@ rule_files:
 
 - Service status overview: FTP service status, total connections, active connections, unique clients, active processes
 - Transfer statistics: total uploads/downloads, total logins, last login time, connection state trend, transfer rate (MB/s)
+- Error monitoring: failed logins, authentication errors, connection timeouts, max-connections limit, rapid reconnections, and FTP protocol error rates split by `reason`
 
 Dashboard features:
 
@@ -398,7 +399,7 @@ Dashboard features:
 
 ### Import
 
-Log in to Grafana → click "+" → "Import" → upload `deploy/grafana-dashboard.json` → select the Prometheus data source.
+Log in to Grafana → click "+" → "Import" → upload `deploy/grafana-dashboard.json` → select your Prometheus instance in the data source picker (the dashboard references the data source via the `${DS_PROMETHEUS}` variable, so no fixed name is required).
 
 ### Useful PromQL Queries
 
