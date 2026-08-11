@@ -43,6 +43,9 @@ type ExporterState struct {
 	// probeClientIP 记录健康检查探测连接的来源 IP，用于 summary_exclude 时过滤探测事件。
 	probeClientIP string
 
+	// seenTypeEvents 记录曾出现的 "文件后缀\x00方向" 标签，用于每轮将未活动的标签归零。
+	seenTypeEvents map[string]struct{}
+
 	lastUniqueClientUpdate time.Time
 	lastProcessUpdate      time.Time
 }
@@ -55,6 +58,7 @@ func NewExporterState() *ExporterState {
 		clientConnectTimes: make(map[string]time.Time),
 		activeProcessIDs:   make(map[string]time.Time),
 		clientLastConnect:  make(map[string]time.Time),
+		seenTypeEvents:     make(map[string]struct{}),
 	}
 }
 
@@ -226,6 +230,9 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 	totalBytesThisRound := int64(0)
 	var earliestTime, latestTime time.Time
 
+	// roundEvents 记录本轮按 (file_type, direction) 传输的文件数，用于更新 vsftp_files_by_type_events 增量 gauge。
+	roundEvents := make(map[string]int64)
+
 	for _, line := range lines {
 		if linesProcessed >= maxLinesPerRead {
 			break
@@ -284,13 +291,31 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 		if clientIP != "" {
 			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
 		}
-		filesByTypeTotal.WithLabelValues(extractFileExtension(filePath), dirLabel).Inc()
+		ext := extractFileExtension(filePath)
+		filesByTypeTotal.WithLabelValues(ext, dirLabel).Inc()
+		roundEvents[ext+"\x00"+dirLabel]++
 		if transferTime > 0 {
 			transferDurationSeconds.Observe(float64(transferTime))
 		}
 	}
 
 	state.lastPosition = newPosition
+
+	// 更新 vsftp_files_by_type_events 增量 gauge：本轮有传输的标签置为本轮数量，
+	// 曾出现但本轮无传输的标签置 0。仪表盘用 sum_over_time 统计所选时间段内各后缀
+	// 传输总数——直接对累计 CounterVec 做 increase()[$__range] 时，系列在其首个 Inc()
+	// 扫描前从未采样（出生即携带值 1），0→1 的首次增量无法被 increase() 观测到。
+	for key, n := range roundEvents {
+		ext, dir, _ := strings.Cut(key, "\x00")
+		filesByTypeEvents.WithLabelValues(ext, dir).Set(float64(n))
+		state.seenTypeEvents[key] = struct{}{}
+	}
+	for key := range state.seenTypeEvents {
+		if roundEvents[key] == 0 {
+			ext, dir, _ := strings.Cut(key, "\x00")
+			filesByTypeEvents.WithLabelValues(ext, dir).Set(0)
+		}
+	}
 
 	// 带宽计算：基于日志时间范围
 	if !earliestTime.IsZero() && !latestTime.IsZero() {

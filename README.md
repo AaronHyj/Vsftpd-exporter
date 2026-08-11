@@ -337,6 +337,7 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_user_connections_total` | Counter | `username` | 按用户名统计的连接总数 |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数 |
 | `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数，`file_type` 直接为小写后缀（如 `ts`/`mp4`/`mkv`），无后缀时为 `no_extension` |
+| `vsftp_files_by_type_events` | Gauge | `file_type`, `direction` | 最近一次解析轮次内按后缀和方向传输的文件数（无传输时归零）。仪表盘以 `sum_over_time` 求所选时间段总数，规避累计计数器诞生时首增量不可见问题 |
 
 ### 高级监控指标（需启用 vsftpd.log）
 
@@ -393,12 +394,13 @@ rule_files:
 `deploy/grafana-dashboard.json` 提供了预配置的仪表板，包含以下面板：
 
 - 服务状态概览：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、活跃进程数
-- 传输统计：上传/下载文件总数、登录总次数、最后登录时间、连接状态趋势图、传输速率图 (MB/s)
+- 传输统计：上传/下载次数、字节增量、登录总次数（均为所选时间段内增量）、最后登录时间（日期/时分秒两行显示）、带宽与传输速度（所选时间段内上传/下载/总平均带宽）、连接状态趋势图、传输速率图 (MB/s)
 - 错误监控：登录失败/认证错误/连接超时/最大连接数限制/快速重连，以及按 `reason` 分类的 FTP 协议错误速率
 
 仪表板特性：
 
 - 支持 `job` 和 `instance` 变量切换
+- 计数类与带宽面板均按仪表板所选时间段计算（`increase(...[$__range])`），并非进程启动以来的累计值
 - 默认 30 秒自动刷新
 - 中文面板标题
 
@@ -441,7 +443,9 @@ sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
 
 # 某时间段各后缀文件传输总数（例如近 1 小时，仪表盘横向柱状图使用）
-sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
+# sum_over_time 对各轮次增量求和；不要对累计计数器直接 increase($__range)，
+# 计数器标签系列在首次 Inc() 时才诞生且无 0 采样点，首次增量对 increase() 不可见
+sum by (file_type) (sum_over_time(vsftp_files_by_type_events[$__range]))
 ```
 
 ## CI/CD

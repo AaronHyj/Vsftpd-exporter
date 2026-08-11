@@ -568,6 +568,41 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 	}
 }
 
+func TestParseFTPLogFilesByTypeEventsGauge(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	log := `Wed Aug  5 10:00:00 2026 0 172.25.234.200 5242880 /media/movie.m4v b _ i a ostore ftp 0 * c
+Wed Aug  5 10:00:01 2026 0 172.25.234.200 2048 /docs/note.log b _ i a ostore ftp 0 * c
+`
+	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	state := NewExporterState()
+	state.lastProcessedTime = time.Now()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("parseFTPLog 失败: %v", err)
+	}
+
+	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("m4v", "upload")); got != 1 {
+		t.Errorf("首轮解析: m4v/upload 增量 gauge = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("log", "upload")); got != 1 {
+		t.Errorf("首轮解析: log/upload 增量 gauge = %v, 期望 1", got)
+	}
+
+	// 无新增日志的轮次应将已出现的标签归零，保证 sum_over_time 按轮次增量求和
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第二次 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("m4v", "upload")); got != 0 {
+		t.Errorf("空闲轮后: m4v/upload 增量 gauge = %v, 期望 0", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("log", "upload")); got != 0 {
+		t.Errorf("空闲轮后: log/upload 增量 gauge = %v, 期望 0", got)
+	}
+}
+
 func TestSummaryExcludeProbeAccount(t *testing.T) {
 	logContent := `Sun Aug  9 16:34:50 2026 [pid 1001] CONNECT: Client "192.168.1.100"
 Sun Aug  9 16:34:51 2026 [pid 1001] [ostore] OK LOGIN: Client "192.168.1.100"

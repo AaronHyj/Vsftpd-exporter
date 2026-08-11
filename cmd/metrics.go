@@ -144,6 +144,11 @@ var (
 		Name: "vsftp_files_by_type_total",
 		Help: "Total number of files transferred by file extension and direction.",
 	}, []string{"file_type", "direction"})
+
+	filesByTypeEvents = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "vsftp_files_by_type_events",
+		Help: "Number of files transferred by file extension and direction within the latest parse interval (resets to 0 when idle).",
+	}, []string{"file_type", "direction"})
 )
 
 func init() {
@@ -176,5 +181,6 @@ func init() {
 		activeProcesses,
 		clientFilesTotal,
 		filesByTypeTotal,
+		filesByTypeEvents,
 	)
 }

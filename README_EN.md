@@ -337,6 +337,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 | `vsftp_user_connections_total` | Counter | `username` | Total connections per username |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction |
 | `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction; `file_type` is the lowercase extension directly (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one |
+| `vsftp_files_by_type_events` | Gauge | `file_type`, `direction` | Files transferred per file extension and direction within the latest parse interval (resets to 0 when idle). The dashboard sums it with `sum_over_time` to get per-extension totals over the selected range, avoiding the first-increment invisibility of lazily-created counter series |
 
 ### Advanced Metrics (requires vsftpd.log)
 
@@ -393,10 +394,12 @@ rule_files:
 `deploy/grafana-dashboard.json` provides a preconfigured dashboard with the following panels:
 
 - Service status overview: FTP service status, total connections, active connections, unique clients, active processes
-- Transfer statistics: total uploads/downloads, total logins, last login time, connection state trend, transfer rate (MB/s)
+- Transfer statistics: upload/download counts, byte increments and total logins (as increments within the selected time range), last login time split into separate date and time rows, average upload/download/total bandwidth over the selected time range, connection state trend, transfer rate (MB/s)
 - Error monitoring: failed logins, authentication errors, connection timeouts, max-connections limit, rapid reconnections, and FTP protocol error rates split by `reason`
 
 Dashboard features:
+
+- Counter and bandwidth panels are evaluated within the selected time range (`increase(...[$__range])`), not cumulative since exporter start
 
 - `job` and `instance` variable switching
 - 30-second auto refresh by default
@@ -441,7 +444,9 @@ sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
 
 # Total files transferred per extension in a time range (used by the dashboard horizontal bar chart)
-sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
+# sum_over_time adds up per-parse-interval deltas; avoid increase($__range) on the cumulative counter,
+# whose label series are born at their first Inc() with no 0-sample, hiding the first increment
+sum by (file_type) (sum_over_time(vsftp_files_by_type_events[$__range]))
 ```
 
 ## CI/CD
