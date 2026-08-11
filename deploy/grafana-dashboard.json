@@ -1682,23 +1682,19 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "按文件后缀统计的传输文件数速率（直接展示后缀，如 ts/mp4/mkv）",
+      "description": "指定时间段内各文件后缀传输的文件总数（横向柱状图，不计速率）",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
-            "axisLabel": "个/分钟",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
+            "fillOpacity": 70,
+            "gradientMode": "none"
           },
           "unit": "short"
-        }
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
@@ -1708,28 +1704,32 @@
       },
       "id": 106,
       "options": {
-        "legend": {
+        "displayMode": "basic",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
           "calcs": [
-            "mean",
-            "lastNotNull",
-            "max"
+            "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom"
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi"
+        "showUnfilled": true,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
         }
       },
       "targets": [
         {
-          "expr": "sum by (file_type) (rate(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60)",
+          "expr": "sum by (file_type) (increase(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[$__range]))",
           "legendFormat": "{{file_type}}",
           "refId": "A"
         }
       ],
-      "title": "各类型文件传输速率 (个/分钟)",
-      "type": "timeseries"
+      "title": "各后缀文件传输数量",
+      "type": "bargauge"
     }
   ],
   "refresh": "30s",

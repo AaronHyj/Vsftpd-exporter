@@ -567,3 +567,72 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 		t.Errorf("xyz/upload 增量 = %v, 期望 1", got)
 	}
 }
+
+func TestSummaryExcludeProbeAccount(t *testing.T) {
+	logContent := `Sun Aug  9 16:34:50 2026 [pid 1001] CONNECT: Client "192.168.1.100"
+Sun Aug  9 16:34:51 2026 [pid 1001] [ostore] OK LOGIN: Client "192.168.1.100"
+Sun Aug  9 16:34:52 2026 [pid 1002] CONNECT: Client "192.168.1.101"
+Sun Aug  9 16:34:53 2026 [pid 1002] [alice] OK LOGIN: Client "192.168.1.101"
+Sun Aug  9 16:34:55 2026 [pid 1003] CONNECT: Client "192.168.1.100"
+`
+	path := filepath.Join(t.TempDir(), "vsftpd.log")
+	if err := os.WriteFile(path, []byte(logContent), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	run := func(exclude bool) (login, reconn, ostoreLogins, aliceLogins, probeConns float64) {
+		beforeLogin := testutil.ToFloat64(ftpLoginTotal)
+		beforeReconn := testutil.ToFloat64(rapidReconnectionsTotal)
+		beforeOstore := testutil.ToFloat64(userLoginsTotal.WithLabelValues("ostore"))
+		beforeAlice := testutil.ToFloat64(userLoginsTotal.WithLabelValues("alice"))
+		beforeProbeConn := testutil.ToFloat64(clientConnectionsTotal.WithLabelValues("192.168.1.100"))
+
+		cfg := &Config{FTPUser: "ostore", SummaryExclude: exclude}
+		state := NewExporterState()
+		state.probeClientIP = "192.168.1.100"
+		if err := parseVsftpdLog(cfg, path, state, nil); err != nil {
+			t.Fatalf("parseVsftpdLog 失败: %v", err)
+		}
+		return testutil.ToFloat64(ftpLoginTotal) - beforeLogin,
+			testutil.ToFloat64(rapidReconnectionsTotal) - beforeReconn,
+			testutil.ToFloat64(userLoginsTotal.WithLabelValues("ostore")) - beforeOstore,
+			testutil.ToFloat64(userLoginsTotal.WithLabelValues("alice")) - beforeAlice,
+			testutil.ToFloat64(clientConnectionsTotal.WithLabelValues("192.168.1.100")) - beforeProbeConn
+	}
+
+	// summary_exclude=true：探测账号与探测来源IP不参与统计
+	login, reconn, ostore, alice, probeConns := run(true)
+	if login != 1 {
+		t.Errorf("exclude=true: 登录总数增量 = %v, 期望 1（仅 alice）", login)
+	}
+	if ostore != 0 {
+		t.Errorf("exclude=true: ostore 登录增量 = %v, 期望 0", ostore)
+	}
+	if alice != 1 {
+		t.Errorf("exclude=true: alice 登录增量 = %v, 期望 1", alice)
+	}
+	if probeConns != 0 {
+		t.Errorf("exclude=true: 探测来源连接增量 = %v, 期望 0", probeConns)
+	}
+	if reconn != 0 {
+		t.Errorf("exclude=true: 快速重连增量 = %v, 期望 0（探测连接不计）", reconn)
+	}
+
+	// summary_exclude=false（默认）：全部计入
+	login, reconn, ostore, alice, probeConns = run(false)
+	if login != 2 {
+		t.Errorf("exclude=false: 登录总数增量 = %v, 期望 2", login)
+	}
+	if ostore != 1 {
+		t.Errorf("exclude=false: ostore 登录增量 = %v, 期望 1", ostore)
+	}
+	if alice != 1 {
+		t.Errorf("exclude=false: alice 登录增量 = %v, 期望 1", alice)
+	}
+	if probeConns != 2 {
+		t.Errorf("exclude=false: 探测来源连接增量 = %v, 期望 2（两次 CONNECT）", probeConns)
+	}
+	if reconn != 1 {
+		t.Errorf("exclude=false: 快速重连增量 = %v, 期望 1", reconn)
+	}
+}

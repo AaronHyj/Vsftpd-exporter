@@ -11,5 +11,6 @@
     "listen_port": "9101",
     "check_interval": 30,
     "vsftplog_enabled": true,
-    "vsftplog_file_path": "/var/log/vsftpd.log"
+    "vsftplog_file_path": "/var/log/vsftpd.log",
+    "summary_exclude": false
 }

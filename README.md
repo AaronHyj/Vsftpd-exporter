@@ -40,7 +40,7 @@ Vsftpd Exporter 通过以下方式采集监控数据：
 - **传输统计**: 上传/下载文件数、字节数、传输耗时分布（Histogram）、平均传输速度、带宽使用率
 - **错误监控**: 登录失败、传输错误（按类型分类）、连接超时、认证错误、最大连接数限制
 - **用户与客户端分析**: 按用户名统计登录/连接数，按客户端 IP 统计连接/文件传输数
-- **文件类型统计**: 将 xferlog 中的文件按原始后缀统计（如 ts/mp4/mkv），展示指定时间段各后缀的传输文件数及速率
+- **文件类型统计**: 将 xferlog 中的文件按原始后缀统计（如 ts/mp4/mkv），以横向柱状图展示指定时间段各后缀传输的文件总数
 - **高级检测**: 快速重连检测（30 秒内同 IP 重连）、连接到登录延迟分布、活跃进程数
 - **SSH 远程监控**: 通过 SSH 连接远程服务器读取日志文件和执行命令
 - **健康检查**: 提供 `/health` 端点，返回 JSON 格式的服务状态信息
@@ -156,7 +156,8 @@ cp configs/config.example.json configs/config.json
     "listen_port": "9101",
     "check_interval": 30,
     "vsftplog_enabled": true,
-    "vsftplog_file_path": "/var/log/vsftpd.log"
+    "vsftplog_file_path": "/var/log/vsftpd.log",
+    "summary_exclude": false
 }
 ```
 
@@ -177,6 +178,7 @@ cp configs/config.example.json configs/config.json
 | `check_interval` | int | 否 | `30` | 采集间隔（1-3600 秒） |
 | `vsftplog_enabled` | bool | 否 | `false` | 是否启用 vsftpd.log 详细日志解析 |
 | `vsftplog_file_path` | string | 否 | - | vsftpd.log 文件路径 |
+| `summary_exclude` | bool | 否 | `false` | 为 `true` 时，登录次数、连接数、快速重连等汇总统计排除健康检查探测账号（`ftp_user`）及其来源 IP 产生的事件，避免探测干扰真实统计数据 |
 
 > **注意**: `configs/config.json` 已在 `.gitignore` 中排除，不会被提交到版本库。请使用 `configs/config.example.json` 作为模板。
 
@@ -239,7 +241,8 @@ curl http://localhost:9101/health
     "ssh_password": "your_password",
     "Xferlog_file_path": "/var/log/xferlog",
     "vsftplog_enabled": true,
-    "vsftplog_file_path": "/var/log/vsftpd.log"
+    "vsftplog_file_path": "/var/log/vsftpd.log",
+    "summary_exclude": true
 }
 ```
 
@@ -437,8 +440,8 @@ sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
 # ts 文件上传速率 (个/分钟)
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
 
-# 某时间段各后缀文件传输总数（例如近 1 小时）
-sum by (file_type) (increase(vsftp_files_by_type_total[1h]))
+# 某时间段各后缀文件传输总数（例如近 1 小时，仪表盘横向柱状图使用）
+sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
 ```
 
 ## CI/CD
