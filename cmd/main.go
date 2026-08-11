@@ -194,7 +194,13 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
+	metricsHandler := promhttp.Handler()
+	// 抓取完成后标记一次新的抓取，触发 vsftp_files_by_type_total 暂存计数的提交：
+	// 首次见到的标签先在抓取中暴露 0 值，再提交增量，避免 increase() 丢失首次增量。
+	mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		metricsHandler.ServeHTTP(w, r)
+		state.bumpScrapeSeq()
+	}))
 	mux.HandleFunc("/health", healthCheckHandler)
 
 	server := &http.Server{

@@ -336,8 +336,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 | `vsftp_user_logins_total` | Counter | `username` | Total successful logins per username |
 | `vsftp_user_connections_total` | Counter | `username` | Total connections per username |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction |
-| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction; `file_type` is the lowercase extension directly (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one |
-| `vsftp_files_by_type_events` | Gauge | `file_type`, `direction` | Files transferred per file extension and direction within the latest parse interval (resets to 0 when idle). The dashboard sums it with `sum_over_time` to get per-extension totals over the selected range, avoiding the first-increment invisibility of lazily-created counter series |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction; `file_type` is the lowercase extension directly (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one. A newly seen label is first registered at 0 and its counts committed after the next scrape, so `increase($__range)` can observe the first increment |
 
 ### Advanced Metrics (requires vsftpd.log)
 
@@ -444,9 +443,7 @@ sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
 
 # Total files transferred per extension in a time range (used by the dashboard horizontal bar chart)
-# sum_over_time adds up per-parse-interval deltas; avoid increase($__range) on the cumulative counter,
-# whose label series are born at their first Inc() with no 0-sample, hiding the first increment
-sum by (file_type) (sum_over_time(vsftp_files_by_type_events[$__range]))
+sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
 ```
 
 ## CI/CD

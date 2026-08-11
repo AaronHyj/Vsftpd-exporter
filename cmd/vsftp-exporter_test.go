@@ -554,25 +554,53 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 		t.Fatalf("parseFTPLog 失败: %v", err)
 	}
 
+	// 冷启动保护：首次见到标签时计数暂存，尚未抓取过 0 值前不提交，计数器保持 0
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 0 {
+		t.Errorf("首轮解析后 mp4/upload 增量 = %v, 期望 0（暂存未提交）", got)
+	}
+
+	// 模拟一次 /metrics 抓取后再解析一轮，触发暂存提交
+	state.bumpScrapeSeq()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
+	}
+
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 1 {
-		t.Errorf("mp4/upload 增量 = %v, 期望 1", got)
+		t.Errorf("提交后 mp4/upload 增量 = %v, 期望 1", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("txt", "upload")) - before; got != 1 {
-		t.Errorf("txt/upload 增量 = %v, 期望 1", got)
+		t.Errorf("提交后 txt/upload 增量 = %v, 期望 1", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mkv", "download")) - before; got != 1 {
-		t.Errorf("mkv/download 增量 = %v, 期望 1", got)
+		t.Errorf("提交后 mkv/download 增量 = %v, 期望 1", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("xyz", "upload")) - before; got != 1 {
-		t.Errorf("xyz/upload 增量 = %v, 期望 1", got)
+		t.Errorf("提交后 xyz/upload 增量 = %v, 期望 1", got)
+	}
+
+	// 已提交的标签后续增量直接 Inc()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("打开测试文件失败: %v", err)
+	}
+	if _, err := f.WriteString("Wed Aug  5 10:00:04 2026 0 172.25.234.200 5242880 /media/abc.mp4 b _ i a ostore ftp 0 * c\n"); err != nil {
+		t.Fatalf("追加日志失败: %v", err)
+	}
+	f.Close()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第三轮 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 2 {
+		t.Errorf("已提交标签再传输: mp4/upload 增量 = %v, 期望 2", got)
 	}
 }
 
-func TestParseFTPLogFilesByTypeEventsGauge(t *testing.T) {
+func TestParseFTPLogFilesByTypeColdStart(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "xferlog")
 	log := `Wed Aug  5 10:00:00 2026 0 172.25.234.200 5242880 /media/movie.m4v b _ i a ostore ftp 0 * c
 Wed Aug  5 10:00:01 2026 0 172.25.234.200 2048 /docs/note.log b _ i a ostore ftp 0 * c
+Wed Aug  5 10:00:02 2026 0 172.25.234.200 5242880 /media/movie.m4v b _ i a ostore ftp 0 * c
 `
 	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
 		t.Fatalf("写入测试文件失败: %v", err)
@@ -584,22 +612,24 @@ Wed Aug  5 10:00:01 2026 0 172.25.234.200 2048 /docs/note.log b _ i a ostore ftp
 		t.Fatalf("parseFTPLog 失败: %v", err)
 	}
 
-	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("m4v", "upload")); got != 1 {
-		t.Errorf("首轮解析: m4v/upload 增量 gauge = %v, 期望 1", got)
+	// 首轮解析后：标签以 0 值注册，计数暂存未提交，increase() 首增量因此可见
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("m4v", "upload")); got != 0 {
+		t.Errorf("首轮解析后 m4v/upload = %v, 期望 0（暂存未提交）", got)
 	}
-	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("log", "upload")); got != 1 {
-		t.Errorf("首轮解析: log/upload 增量 gauge = %v, 期望 1", got)
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("log", "upload")); got != 0 {
+		t.Errorf("首轮解析后 log/upload = %v, 期望 0（暂存未提交）", got)
 	}
 
-	// 无新增日志的轮次应将已出现的标签归零，保证 sum_over_time 按轮次增量求和
+	// 一次抓取后提交：0→n 的增量完整可见
+	state.bumpScrapeSeq()
 	if err := parseFTPLog(path, state, nil); err != nil {
-		t.Fatalf("第二次 parseFTPLog 失败: %v", err)
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
 	}
-	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("m4v", "upload")); got != 0 {
-		t.Errorf("空闲轮后: m4v/upload 增量 gauge = %v, 期望 0", got)
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("m4v", "upload")); got != 2 {
+		t.Errorf("提交后 m4v/upload = %v, 期望 2", got)
 	}
-	if got := testutil.ToFloat64(filesByTypeEvents.WithLabelValues("log", "upload")); got != 0 {
-		t.Errorf("空闲轮后: log/upload 增量 gauge = %v, 期望 0", got)
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("log", "upload")); got != 1 {
+		t.Errorf("提交后 log/upload = %v, 期望 1", got)
 	}
 }
 
