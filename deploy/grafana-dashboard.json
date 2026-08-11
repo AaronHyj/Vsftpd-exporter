@@ -1764,7 +1764,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "指定时间段内各文件后缀传输的文件总数（每解析轮次的增量 gauge 经 sum_over_time 求和，避免累计计数器首次增量不可见）",
+      "description": "指定时间段内各文件后缀传输的文件总数（对单调计数器取 increase($__range)，首次增量经 0 采样预注册避免丢失）",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1805,7 +1805,7 @@
       },
       "targets": [
 {
-   "expr": "sum by (file_type) (sum_over_time(vsftp_files_by_type_events{job=\"$job\", instance=\"$instance\"}[$__range]))",
+   "expr": "sum by (file_type) (increase(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[$__range]))",
    "legendFormat": "{{file_type}}",
    "refId": "A"
   }

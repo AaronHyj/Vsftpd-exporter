@@ -336,8 +336,7 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_user_logins_total` | Counter | `username` | 按用户名统计的成功登录总数 |
 | `vsftp_user_connections_total` | Counter | `username` | 按用户名统计的连接总数 |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数 |
-| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数，`file_type` 直接为小写后缀（如 `ts`/`mp4`/`mkv`），无后缀时为 `no_extension` |
-| `vsftp_files_by_type_events` | Gauge | `file_type`, `direction` | 最近一次解析轮次内按后缀和方向传输的文件数（无传输时归零）。仪表盘以 `sum_over_time` 求所选时间段总数，规避累计计数器诞生时首增量不可见问题 |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数，`file_type` 直接为小写后缀（如 `ts`/`mp4`/`mkv`），无后缀时为 `no_extension`。首次见到的标签先以 0 值注册、待下一次抓取后再提交增量，保证 `increase($__range)` 能观测到首次增量 |
 
 ### 高级监控指标（需启用 vsftpd.log）
 
@@ -443,9 +442,7 @@ sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
 
 # 某时间段各后缀文件传输总数（例如近 1 小时，仪表盘横向柱状图使用）
-# sum_over_time 对各轮次增量求和；不要对累计计数器直接 increase($__range)，
-# 计数器标签系列在首次 Inc() 时才诞生且无 0 采样点，首次增量对 increase() 不可见
-sum by (file_type) (sum_over_time(vsftp_files_by_type_events[$__range]))
+sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
 ```
 
 ## CI/CD

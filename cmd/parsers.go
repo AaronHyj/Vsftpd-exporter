@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -43,8 +44,16 @@ type ExporterState struct {
 	// probeClientIP 记录健康检查探测连接的来源 IP，用于 summary_exclude 时过滤探测事件。
 	probeClientIP string
 
-	// seenTypeEvents 记录曾出现的 "文件后缀\x00方向" 标签，用于每轮将未活动的标签归零。
-	seenTypeEvents map[string]struct{}
+	// typeEventsMu 保护 vsftp_files_by_type_total 的冷启动提交状态。
+	// 计数器标签系列在首次 Inc() 之前从未有 0 采样点，increase() 无法观测到出生时的
+	// 0→1 首次增量。因此在首次见到某 (file_type, direction) 时先用 Add(0) 注册 0 值系列，
+	// 计数暂存于 pending，待下一次 /metrics 抓取（scrapeSeq 递增）之后才提交到计数器，
+	// 保证 0 采样点先于首次增量存在于时间序列中。
+	typeEventsMu        sync.Mutex
+	scrapeSeq           int64
+	pendingTypeCounts   map[string]int64
+	pendingTypeSeq      map[string]int64
+	committedTypeLabels map[string]bool
 
 	lastUniqueClientUpdate time.Time
 	lastProcessUpdate      time.Time
@@ -53,12 +62,14 @@ type ExporterState struct {
 func NewExporterState() *ExporterState {
 	now := time.Now()
 	return &ExporterState{
-		lastProcessedTime:  now,
-		clientLastActivity: make(map[string]time.Time),
-		clientConnectTimes: make(map[string]time.Time),
-		activeProcessIDs:   make(map[string]time.Time),
-		clientLastConnect:  make(map[string]time.Time),
-		seenTypeEvents:     make(map[string]struct{}),
+		lastProcessedTime:   now,
+		clientLastActivity:  make(map[string]time.Time),
+		clientConnectTimes:  make(map[string]time.Time),
+		activeProcessIDs:    make(map[string]time.Time),
+		clientLastConnect:   make(map[string]time.Time),
+		pendingTypeCounts:   make(map[string]int64),
+		pendingTypeSeq:      make(map[string]int64),
+		committedTypeLabels: make(map[string]bool),
 	}
 }
 
@@ -199,6 +210,47 @@ func extractFileExtension(filePath string) string {
 	return ext
 }
 
+// recordTypeEvent 记录一次按后缀和方向的文件传输。已提交的标签直接 Inc()；
+// 首次见到的标签先用 Add(0) 注册 0 值系列并暂存计数，待抓取到 0 采样后再提交，
+// 使 increase()[$__range] 能观测到该标签的首次增量。
+func (s *ExporterState) recordTypeEvent(fileType, direction string) {
+	key := fileType + "\x00" + direction
+	s.typeEventsMu.Lock()
+	defer s.typeEventsMu.Unlock()
+	if s.committedTypeLabels[key] {
+		filesByTypeTotal.WithLabelValues(fileType, direction).Inc()
+		return
+	}
+	if s.pendingTypeCounts[key] == 0 {
+		filesByTypeTotal.WithLabelValues(fileType, direction).Add(0)
+		s.pendingTypeSeq[key] = s.scrapeSeq
+	}
+	s.pendingTypeCounts[key]++
+}
+
+// commitPendingTypeEvents 在每次解析轮次结束时调用：将"已在至少一次抓取中暴露 0 值"的
+// 暂存计数提交到计数器，此后该标签的增量直接走 Inc()。
+func (s *ExporterState) commitPendingTypeEvents() {
+	s.typeEventsMu.Lock()
+	defer s.typeEventsMu.Unlock()
+	for key, n := range s.pendingTypeCounts {
+		if s.pendingTypeSeq[key] < s.scrapeSeq {
+			fileType, direction, _ := strings.Cut(key, "\x00")
+			filesByTypeTotal.WithLabelValues(fileType, direction).Add(float64(n))
+			delete(s.pendingTypeCounts, key)
+			delete(s.pendingTypeSeq, key)
+			s.committedTypeLabels[key] = true
+		}
+	}
+}
+
+// bumpScrapeSeq 在每次 /metrics 抓取完成后调用，标记新一次抓取已发生。
+func (s *ExporterState) bumpScrapeSeq() {
+	s.typeEventsMu.Lock()
+	s.scrapeSeq++
+	s.typeEventsMu.Unlock()
+}
+
 // parseXferlogTimestamp 解析 xferlog 时间戳格式: "Wed Oct 15 16:04:42 2025"
 func parseXferlogTimestamp(timeStr string) (time.Time, error) {
 	layouts := []string{
@@ -229,9 +281,6 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 
 	totalBytesThisRound := int64(0)
 	var earliestTime, latestTime time.Time
-
-	// roundEvents 记录本轮按 (file_type, direction) 传输的文件数，用于更新 vsftp_files_by_type_events 增量 gauge。
-	roundEvents := make(map[string]int64)
 
 	for _, line := range lines {
 		if linesProcessed >= maxLinesPerRead {
@@ -292,30 +341,13 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
 		}
 		ext := extractFileExtension(filePath)
-		filesByTypeTotal.WithLabelValues(ext, dirLabel).Inc()
-		roundEvents[ext+"\x00"+dirLabel]++
+		state.recordTypeEvent(ext, dirLabel)
 		if transferTime > 0 {
 			transferDurationSeconds.Observe(float64(transferTime))
 		}
 	}
 
 	state.lastPosition = newPosition
-
-	// 更新 vsftp_files_by_type_events 增量 gauge：本轮有传输的标签置为本轮数量，
-	// 曾出现但本轮无传输的标签置 0。仪表盘用 sum_over_time 统计所选时间段内各后缀
-	// 传输总数——直接对累计 CounterVec 做 increase()[$__range] 时，系列在其首个 Inc()
-	// 扫描前从未采样（出生即携带值 1），0→1 的首次增量无法被 increase() 观测到。
-	for key, n := range roundEvents {
-		ext, dir, _ := strings.Cut(key, "\x00")
-		filesByTypeEvents.WithLabelValues(ext, dir).Set(float64(n))
-		state.seenTypeEvents[key] = struct{}{}
-	}
-	for key := range state.seenTypeEvents {
-		if roundEvents[key] == 0 {
-			ext, dir, _ := strings.Cut(key, "\x00")
-			filesByTypeEvents.WithLabelValues(ext, dir).Set(0)
-		}
-	}
 
 	// 带宽计算：基于日志时间范围
 	if !earliestTime.IsZero() && !latestTime.IsZero() {
@@ -333,6 +365,8 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 	if totalBytes > 0 && programRunTime > 0 {
 		averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 	}
+
+	state.commitPendingTypeEvents()
 
 	slog.Debug("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount, "incomplete", incompleteCount)
 	return nil
