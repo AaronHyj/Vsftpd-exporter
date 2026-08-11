@@ -40,7 +40,7 @@ All collection tasks run periodically at the `check_interval`.
 - **Transfer statistics**: upload/download file counts, bytes, transfer duration distribution (Histogram), average transfer speed, and bandwidth usage
 - **Error monitoring**: failed logins, transfer errors (by type), connection timeouts, authentication errors, and max-connection limit hits
 - **User & client analytics**: logins/connections per username, connections/file transfers per client IP
-- **File type statistics**: counts transferred files by their raw extension (e.g. ts/mp4/mkv) and shows counts and rates per extension over a time range
+- **File type statistics**: counts transferred files by their raw extension (e.g. ts/mp4/mkv) and shows the total per extension for a selected time range in a horizontal bar chart
 - **Advanced detection**: rapid reconnection detection (same IP reconnecting within 30 s), connect-to-login latency distribution, active process count
 - **SSH remote monitoring**: reads log files and executes commands on a remote server over SSH
 - **Health check**: provides a `/health` endpoint returning service status as JSON
@@ -156,7 +156,8 @@ cp configs/config.example.json configs/config.json
     "listen_port": "9101",
     "check_interval": 30,
     "vsftplog_enabled": true,
-    "vsftplog_file_path": "/var/log/vsftpd.log"
+    "vsftplog_file_path": "/var/log/vsftpd.log",
+    "summary_exclude": false
 }
 ```
 
@@ -177,6 +178,7 @@ cp configs/config.example.json configs/config.json
 | `check_interval` | int | No | `30` | Collection interval (1-3600 seconds) |
 | `vsftplog_enabled` | bool | No | `false` | Enable vsftpd.log verbose log parsing |
 | `vsftplog_file_path` | string | No | - | Path to the vsftpd.log file |
+| `summary_exclude` | bool | No | `false` | When `true`, summary stats (login counts, connection counts, rapid reconnections) exclude events from the health-check probe account (`ftp_user`) and its source IP, so the probe does not skew real statistics |
 
 > **Note**: `configs/config.json` is excluded via `.gitignore` and will not be committed. Use `configs/config.example.json` as a template.
 
@@ -239,7 +241,8 @@ To monitor vsftpd on a remote server:
     "ssh_password": "your_password",
     "Xferlog_file_path": "/var/log/xferlog",
     "vsftplog_enabled": true,
-    "vsftplog_file_path": "/var/log/vsftpd.log"
+    "vsftplog_file_path": "/var/log/vsftpd.log",
+    "summary_exclude": true
 }
 ```
 
@@ -437,8 +440,8 @@ sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
 # ts upload rate (files per minute)
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60
 
-# Total files transferred per extension in a time range (e.g. last 1 hour)
-sum by (file_type) (increase(vsftp_files_by_type_total[1h]))
+# Total files transferred per extension in a time range (used by the dashboard horizontal bar chart)
+sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
 ```
 
 ## CI/CD

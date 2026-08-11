@@ -40,6 +40,9 @@ type ExporterState struct {
 	activeProcessIDs   map[string]time.Time
 	clientLastConnect  map[string]time.Time
 
+	// probeClientIP 记录健康检查探测连接的来源 IP，用于 summary_exclude 时过滤探测事件。
+	probeClientIP string
+
 	lastUniqueClientUpdate time.Time
 	lastProcessUpdate      time.Time
 }
@@ -393,6 +396,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			processID := matches[2]
 			clientIP := matches[3]
 
+			// summary_exclude 开启时，忽略健康检查探测产生的连接
+			if config.SummaryExclude && state.probeClientIP != "" && clientIP == state.probeClientIP {
+				continue
+			}
+
 			clientConnectionsTotal.WithLabelValues(clientIP).Inc()
 			connectCount++
 
@@ -418,6 +426,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			processID := matches[2]
 			username := matches[3]
 			clientIP := matches[4]
+
+			// summary_exclude 开启时，忽略健康检查探测账号的登录事件
+			if config.SummaryExclude && username == config.FTPUser {
+				continue
+			}
 
 			userLoginsTotal.WithLabelValues(username).Inc()
 			userConnectionsTotal.WithLabelValues(username).Inc()

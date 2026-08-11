@@ -34,6 +34,7 @@ type Config struct {
 	CheckInterval    int    `json:"check_interval"`
 	VsftplogEnabled  bool   `json:"vsftplog_enabled"`
 	VsftplogFilePath string `json:"vsftplog_file_path"`
+	SummaryExclude   bool   `json:"summary_exclude"`
 }
 
 func loadAndValidateConfig(file string) (*Config, error) {

@@ -71,37 +71,47 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func checkFTPLogin(config *Config) error {
-	conn, err := ftp.Dial(config.TargetHost+":"+config.FTPPort, ftp.DialWithTimeout(10*time.Second))
+func checkFTPLogin(config *Config) (probeIP string, err error) {
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", config.TargetHost+":"+config.FTPPort)
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			connectionTimeoutsTotal.Inc()
 		}
-		return fmt.Errorf("连接FTP服务器失败: %w", err)
+		return "", fmt.Errorf("连接FTP服务器失败: %w", err)
 	}
-	defer conn.Quit()
+	if tcpAddr, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+		probeIP = tcpAddr.IP.String()
+	}
 
-	if err := conn.Login(config.FTPUser, config.FTPPassword); err != nil {
+	ftpConn, err := ftp.Dial(config.TargetHost+":"+config.FTPPort, ftp.DialWithNetConn(conn), ftp.DialWithTimeout(10*time.Second))
+	if err != nil {
+		conn.Close()
+		return probeIP, fmt.Errorf("初始化FTP连接失败: %w", err)
+	}
+	defer ftpConn.Quit()
+
+	if err := ftpConn.Login(config.FTPUser, config.FTPPassword); err != nil {
 		var protoErr *textproto.Error
 		if errors.As(err, &protoErr) && protoErr.Code == 530 {
-			return fmt.Errorf("FTP登录失败（认证被拒绝 530）: %w", err)
+			return probeIP, fmt.Errorf("FTP登录失败（认证被拒绝 530）: %w", err)
 		}
-		return fmt.Errorf("FTP登录失败: %w", err)
+		return probeIP, fmt.Errorf("FTP登录失败: %w", err)
 	}
 
-	return nil
+	return probeIP, nil
 }
 
 func runChecks(config *Config, state *ExporterState, sshMgr *SSHManager) {
 	probeRes := probeResult{checkTime: time.Now()}
-	if err := checkFTPLogin(config); err != nil {
+	if probeIP, err := checkFTPLogin(config); err != nil {
 		slog.Error("FTP连接检查失败", "error", err)
 		ftpLoginSuccess.Set(0)
 		probeRes.err = err.Error()
 	} else {
 		ftpLoginSuccess.Set(1)
 		probeRes.ok = true
+		state.probeClientIP = probeIP
 	}
 	lastProbe.Store(probeRes)
 
