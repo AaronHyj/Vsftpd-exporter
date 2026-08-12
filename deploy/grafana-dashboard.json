@@ -649,7 +649,8 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "short",
+          "decimals": 0
         },
         "overrides": []
       },
@@ -676,13 +677,13 @@
       },
       "targets": [
         {
-          "expr": "vsftp_login_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "increase(vsftp_login_total{job=\"$job\", instance=\"$instance\"}[$__range])",
           "refId": "A"
         }
       ],
       "title": "登录总次数",
       "type": "stat",
-      "description": "成功登录总次数（进程内累计计数器，排除探测账号）"
+      "description": "所选时间段内成功登录次数（区间增量；是否排除探测账号取决于 summary_exclude 配置）"
     },
     {
       "datasource": {
@@ -1774,7 +1775,8 @@
             "fillOpacity": 70,
             "gradientMode": "none"
           },
-          "unit": "short"
+          "unit": "short",
+          "decimals": 0
         },
         "overrides": []
       },

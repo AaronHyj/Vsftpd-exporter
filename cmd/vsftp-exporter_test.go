@@ -616,21 +616,31 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 		t.Fatalf("parseFTPLog 失败: %v", err)
 	}
 
-	// 首轮解析后：计数器即时更新，正确反映已解析的数据
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 1 {
-		t.Errorf("首轮解析后 mp4/upload 增量 = %v, 期望 1", got)
-	}
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("txt", "upload")) - before; got != 1 {
-		t.Errorf("首轮解析后 txt/upload 增量 = %v, 期望 1", got)
-	}
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mkv", "download")) - before; got != 1 {
-		t.Errorf("首轮解析后 mkv/download 增量 = %v, 期望 1", got)
-	}
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("xyz", "upload")) - before; got != 1 {
-		t.Errorf("首轮解析后 xyz/upload 增量 = %v, 期望 1", got)
+	// 冷启动保护：首次见到标签时计数暂存，尚未抓取过 0 值前不提交，计数器保持 0
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 0 {
+		t.Errorf("首轮解析后 mp4/upload 增量 = %v, 期望 0（暂存未提交）", got)
 	}
 
-	// 再次传输后增量直接 Inc()
+	// 模拟一次 /metrics 抓取后再解析一轮，触发暂存提交
+	state.bumpScrapeSeq()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
+	}
+
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 1 {
+		t.Errorf("提交后 mp4/upload 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("txt", "upload")) - before; got != 1 {
+		t.Errorf("提交后 txt/upload 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mkv", "download")) - before; got != 1 {
+		t.Errorf("提交后 mkv/download 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("xyz", "upload")) - before; got != 1 {
+		t.Errorf("提交后 xyz/upload 增量 = %v, 期望 1", got)
+	}
+
+	// 已提交的标签后续增量直接 Inc()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatalf("打开测试文件失败: %v", err)
@@ -640,7 +650,7 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 	}
 	f.Close()
 	if err := parseFTPLog(path, state, nil); err != nil {
-		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
+		t.Fatalf("第三轮 parseFTPLog 失败: %v", err)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 2 {
 		t.Errorf("已提交标签再传输: mp4/upload 增量 = %v, 期望 2", got)
@@ -664,12 +674,24 @@ Wed Aug  5 10:00:02 2026 0 172.25.234.200 5242880 /media/movie.m4v b _ i a ostor
 		t.Fatalf("parseFTPLog 失败: %v", err)
 	}
 
-	// 首轮解析后：计数即时提交，0→n 增量准确可见
+	// 首轮解析后：标签以 0 值注册，计数暂存未提交，increase() 首增量因此可见
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("m4v", "upload")); got != 0 {
+		t.Errorf("首轮解析后 m4v/upload = %v, 期望 0（暂存未提交）", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("log", "upload")); got != 0 {
+		t.Errorf("首轮解析后 log/upload = %v, 期望 0（暂存未提交）", got)
+	}
+
+	// 一次抓取后提交：0→n 的增量完整可见
+	state.bumpScrapeSeq()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
+	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("m4v", "upload")); got != 2 {
-		t.Errorf("首轮解析后 m4v/upload = %v, 期望 2", got)
+		t.Errorf("提交后 m4v/upload = %v, 期望 2", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("log", "upload")); got != 1 {
-		t.Errorf("首轮解析后 log/upload = %v, 期望 1", got)
+		t.Errorf("提交后 log/upload = %v, 期望 1", got)
 	}
 }
 

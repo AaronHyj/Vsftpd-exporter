@@ -279,31 +279,37 @@ func extractFileExtension(filePath string) string {
 	return ext
 }
 
-// recordTypeEvent 记录一次按后缀和方向的文件传输。
-// 首次见到的标签先用 Add(0) 注册 0 值系列，随后直接 Inc()。
+// recordTypeEvent 记录一次按后缀和方向的文件传输。已提交的标签直接 Inc()；
+// 首次见到的标签先用 Add(0) 注册 0 值系列并暂存计数，待抓取到 0 采样后再提交，
+// 使 increase()[$__range] 能观测到该标签的首次增量。
 func (s *ExporterState) recordTypeEvent(fileType, direction string) {
 	key := fileType + "\x00" + direction
 	s.typeEventsMu.Lock()
 	defer s.typeEventsMu.Unlock()
-	if !s.committedTypeLabels[key] {
-		filesByTypeTotal.WithLabelValues(fileType, direction).Add(0)
-		s.committedTypeLabels[key] = true
+	if s.committedTypeLabels[key] {
+		filesByTypeTotal.WithLabelValues(fileType, direction).Inc()
+		return
 	}
-	filesByTypeTotal.WithLabelValues(fileType, direction).Inc()
+	if s.pendingTypeCounts[key] == 0 {
+		filesByTypeTotal.WithLabelValues(fileType, direction).Add(0)
+		s.pendingTypeSeq[key] = s.scrapeSeq
+	}
+	s.pendingTypeCounts[key]++
 }
 
+// commitPendingTypeEvents 在每次解析轮次结束时调用：将"已在至少一次抓取中暴露 0 值"的
+// 暂存计数提交到计数器，此后该标签的增量直接走 Inc()。
 func (s *ExporterState) commitPendingTypeEvents() {
 	s.typeEventsMu.Lock()
 	defer s.typeEventsMu.Unlock()
 	for key, n := range s.pendingTypeCounts {
-		fileType, direction, _ := strings.Cut(key, "\x00")
-		if !s.committedTypeLabels[key] {
-			filesByTypeTotal.WithLabelValues(fileType, direction).Add(0)
+		if s.pendingTypeSeq[key] < s.scrapeSeq {
+			fileType, direction, _ := strings.Cut(key, "\x00")
+			filesByTypeTotal.WithLabelValues(fileType, direction).Add(float64(n))
+			delete(s.pendingTypeCounts, key)
+			delete(s.pendingTypeSeq, key)
 			s.committedTypeLabels[key] = true
 		}
-		filesByTypeTotal.WithLabelValues(fileType, direction).Add(float64(n))
-		delete(s.pendingTypeCounts, key)
-		delete(s.pendingTypeSeq, key)
 	}
 }
 
