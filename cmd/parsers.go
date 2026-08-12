@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -69,16 +68,6 @@ func NewExporterState() *ExporterState {
 		pendingTypeSeq:      make(map[string]int64),
 		committedTypeLabels: make(map[string]bool),
 	}
-}
-
-func getFileInode(fileInfo os.FileInfo) uint64 {
-	if fileInfo == nil {
-		return 0
-	}
-	if sys, ok := fileInfo.Sys().(*syscall.Stat_t); ok {
-		return uint64(sys.Ino)
-	}
-	return 0
 }
 
 func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64, lastInode uint64) ([]string, int64, uint64, error) {
@@ -348,6 +337,9 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 	totalDownloads := 0
 	totalIncomplete := 0
 
+	totalBytesThisRound := int64(0)
+	var earliestTime, latestTime time.Time
+
 	for {
 		lines, newPosition, newInode, err := readRemoteFile(sshMgr, logPath, state.lastPosition, state.lastInode)
 		if err != nil {
@@ -365,9 +357,6 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 		uploadCount := 0
 		downloadCount := 0
 		incompleteCount := 0
-
-		totalBytesThisRound := int64(0)
-		var earliestTime, latestTime time.Time
 
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -430,23 +419,6 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 			}
 		}
 
-		// 带宽计算：基于日志时间范围
-		if !earliestTime.IsZero() && !latestTime.IsZero() {
-			logTimeDiff := latestTime.Sub(earliestTime).Seconds()
-			if logTimeDiff > 0 {
-				bandwidthUsage.Set(float64(totalBytesThisRound) / logTimeDiff)
-			}
-		} else if totalBytesThisRound == 0 {
-			bandwidthUsage.Set(0)
-		}
-
-		// 平均传输速度：基于程序运行以来的总量
-		totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
-		programRunTime := time.Since(state.lastProcessedTime).Seconds()
-		if totalBytes > 0 && programRunTime > 0 {
-			averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
-		}
-
 		totalLinesProcessed += linesProcessed
 		totalUploads += uploadCount
 		totalDownloads += downloadCount
@@ -455,6 +427,23 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 		if len(lines) < maxLinesPerRead {
 			break
 		}
+	}
+
+	// 带宽计算：基于本轮解析的所有日志时间范围
+	if !earliestTime.IsZero() && !latestTime.IsZero() {
+		logTimeDiff := latestTime.Sub(earliestTime).Seconds()
+		if logTimeDiff > 0 {
+			bandwidthUsage.Set(float64(totalBytesThisRound) / logTimeDiff)
+		}
+	} else if totalBytesThisRound == 0 {
+		bandwidthUsage.Set(0)
+	}
+
+	// 平均传输速度：基于程序运行以来的总量
+	totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
+	programRunTime := time.Since(state.lastProcessedTime).Seconds()
+	if totalBytes > 0 && programRunTime > 0 {
+		averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 	}
 
 	state.commitPendingTypeEvents()
