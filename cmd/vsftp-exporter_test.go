@@ -228,7 +228,7 @@ func TestReadLocalFilePositionTracking(t *testing.T) {
 		t.Fatalf("写入测试文件失败: %v", err)
 	}
 
-	lines, pos, err := readLocalFile(path, 0)
+	lines, pos, ino, err := readLocalFile(path, 0, 0)
 	if err != nil {
 		t.Fatalf("readLocalFile 失败: %v", err)
 	}
@@ -238,13 +238,16 @@ func TestReadLocalFilePositionTracking(t *testing.T) {
 	if pos != int64(len("line1\n")) {
 		t.Fatalf("position = %d, 期望 %d", pos, len("line1\n"))
 	}
+	if ino == 0 {
+		t.Fatalf("inode 应大于 0")
+	}
 
 	// 追加换行符后再次读取
 	if err := os.WriteFile(path, []byte(content+"\n"), 0644); err != nil {
 		t.Fatalf("更新测试文件失败: %v", err)
 	}
 
-	lines2, pos2, err := readLocalFile(path, pos)
+	lines2, pos2, _, err := readLocalFile(path, pos, ino)
 	if err != nil {
 		t.Fatalf("readLocalFile 失败: %v", err)
 	}
@@ -265,7 +268,7 @@ func TestReadLocalFileAppendContinue(t *testing.T) {
 		t.Fatalf("写入测试文件失败: %v", err)
 	}
 
-	_, pos, err := readLocalFile(path, 0)
+	_, pos, ino, err := readLocalFile(path, 0, 0)
 	if err != nil {
 		t.Fatalf("readLocalFile 失败: %v", err)
 	}
@@ -278,7 +281,7 @@ func TestReadLocalFileAppendContinue(t *testing.T) {
 		t.Fatalf("追加测试文件失败: %v", err)
 	}
 
-	lines, pos2, err := readLocalFile(path, pos)
+	lines, pos2, _, err := readLocalFile(path, pos, ino)
 	if err != nil {
 		t.Fatalf("readLocalFile 失败: %v", err)
 	}
@@ -302,7 +305,7 @@ func TestReadLocalFileLineCap(t *testing.T) {
 		t.Fatalf("写入测试文件失败: %v", err)
 	}
 
-	lines, pos, err := readLocalFile(path, 0)
+	lines, pos, ino, err := readLocalFile(path, 0, 0)
 	if err != nil {
 		t.Fatalf("readLocalFile 失败: %v", err)
 	}
@@ -313,12 +316,71 @@ func TestReadLocalFileLineCap(t *testing.T) {
 		t.Fatalf("position = %d, 期望 %d", pos, maxLinesPerRead*len("line\n"))
 	}
 
-	lines, _, err = readLocalFile(path, pos)
+	lines, _, _, err = readLocalFile(path, pos, ino)
 	if err != nil {
 		t.Fatalf("readLocalFile 失败: %v", err)
 	}
 	if len(lines) != 500 {
 		t.Fatalf("剩余行数 = %d, 期望 500", len(lines))
+	}
+}
+
+func TestReadLocalFileRotationWithRotatedFileTail(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	rotatedPath := path + ".1"
+
+	// 模拟旧文件写入 100 字节，已消费 60 字节
+	oldContent := "Wed Oct 15 16:04:42 2025 1 172.25.235.63 1000 /txt/a.txt b _ i g user ftp 0 * c\nWed Oct 15 16:04:43 2025 1 172.25.235.63 2000 /txt/b.txt b _ i g user ftp 0 * c\n"
+	if err := os.WriteFile(path, []byte(oldContent), 0644); err != nil {
+		t.Fatalf("写入初始文件失败: %v", err)
+	}
+
+	lines, _, ino, err := readLocalFile(path, 0, 0)
+	if err != nil {
+		t.Fatalf("readLocalFile 失败: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("期望读取2行, got %d", len(lines))
+	}
+
+	// 仅模拟上次消费了第 1 行的长度
+	line1Len := int64(len(strings.Split(oldContent, "\n")[0]) + 1)
+
+	// 模拟日志轮转：重命名为 xferlog.1 并新建 xferlog 且新文件写入了较长的内容
+	if err := os.Rename(path, rotatedPath); err != nil {
+		t.Fatalf("重命名轮转文件失败: %v", err)
+	}
+	newContent := "Wed Oct 15 16:05:00 2025 1 172.25.235.63 3000 /txt/c.txt b _ i g user ftp 0 * c\n"
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		t.Fatalf("创建新日志文件失败: %v", err)
+	}
+
+	// 从 line1Len 和旧 ino 读取，触发轮转检测，应优先读取 xferlog.1 剩余的第 2 行
+	lines2, pos2, ino2, err := readLocalFile(path, line1Len, ino)
+	if err != nil {
+		t.Fatalf("读取轮转文件失败: %v", err)
+	}
+	if len(lines2) != 1 || !strings.Contains(lines2[0], "b.txt") {
+		t.Fatalf("应从 xferlog.1 读取 b.txt，got %v", lines2)
+	}
+	if pos2 != int64(len(oldContent)) {
+		t.Fatalf("position 应为旧文件总长 %d, got %d", len(oldContent), pos2)
+	}
+
+	// 再次读取（pos2 已达旧文件末尾），应切换到新文件从 0 开始读取
+	lines3, pos3, ino3, err := readLocalFile(path, pos2, ino2)
+	if err != nil {
+		t.Fatalf("读取新文件失败: %v", err)
+	}
+	if len(lines3) != 1 || !strings.Contains(lines3[0], "c.txt") {
+		t.Fatalf("应从新文件读取 c.txt，got %v", lines3)
+	}
+	if pos3 != int64(len(newContent)) {
+		t.Fatalf("position 应为新文件长度 %d, got %d", len(newContent), pos3)
+	}
+	if ino3 == ino {
+		t.Fatalf("新文件的 inode 应与旧文件不同")
 	}
 }
 
@@ -554,31 +616,21 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 		t.Fatalf("parseFTPLog 失败: %v", err)
 	}
 
-	// 冷启动保护：首次见到标签时计数暂存，尚未抓取过 0 值前不提交，计数器保持 0
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 0 {
-		t.Errorf("首轮解析后 mp4/upload 增量 = %v, 期望 0（暂存未提交）", got)
-	}
-
-	// 模拟一次 /metrics 抓取后再解析一轮，触发暂存提交
-	state.bumpScrapeSeq()
-	if err := parseFTPLog(path, state, nil); err != nil {
-		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
-	}
-
+	// 首轮解析后：计数器即时更新，正确反映已解析的数据
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 1 {
-		t.Errorf("提交后 mp4/upload 增量 = %v, 期望 1", got)
+		t.Errorf("首轮解析后 mp4/upload 增量 = %v, 期望 1", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("txt", "upload")) - before; got != 1 {
-		t.Errorf("提交后 txt/upload 增量 = %v, 期望 1", got)
+		t.Errorf("首轮解析后 txt/upload 增量 = %v, 期望 1", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mkv", "download")) - before; got != 1 {
-		t.Errorf("提交后 mkv/download 增量 = %v, 期望 1", got)
+		t.Errorf("首轮解析后 mkv/download 增量 = %v, 期望 1", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("xyz", "upload")) - before; got != 1 {
-		t.Errorf("提交后 xyz/upload 增量 = %v, 期望 1", got)
+		t.Errorf("首轮解析后 xyz/upload 增量 = %v, 期望 1", got)
 	}
 
-	// 已提交的标签后续增量直接 Inc()
+	// 再次传输后增量直接 Inc()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		t.Fatalf("打开测试文件失败: %v", err)
@@ -588,7 +640,7 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 	}
 	f.Close()
 	if err := parseFTPLog(path, state, nil); err != nil {
-		t.Fatalf("第三轮 parseFTPLog 失败: %v", err)
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload")) - before; got != 2 {
 		t.Errorf("已提交标签再传输: mp4/upload 增量 = %v, 期望 2", got)
@@ -612,24 +664,12 @@ Wed Aug  5 10:00:02 2026 0 172.25.234.200 5242880 /media/movie.m4v b _ i a ostor
 		t.Fatalf("parseFTPLog 失败: %v", err)
 	}
 
-	// 首轮解析后：标签以 0 值注册，计数暂存未提交，increase() 首增量因此可见
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("m4v", "upload")); got != 0 {
-		t.Errorf("首轮解析后 m4v/upload = %v, 期望 0（暂存未提交）", got)
-	}
-	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("log", "upload")); got != 0 {
-		t.Errorf("首轮解析后 log/upload = %v, 期望 0（暂存未提交）", got)
-	}
-
-	// 一次抓取后提交：0→n 的增量完整可见
-	state.bumpScrapeSeq()
-	if err := parseFTPLog(path, state, nil); err != nil {
-		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
-	}
+	// 首轮解析后：计数即时提交，0→n 增量准确可见
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("m4v", "upload")); got != 2 {
-		t.Errorf("提交后 m4v/upload = %v, 期望 2", got)
+		t.Errorf("首轮解析后 m4v/upload = %v, 期望 2", got)
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("log", "upload")); got != 1 {
-		t.Errorf("提交后 log/upload = %v, 期望 1", got)
+		t.Errorf("首轮解析后 log/upload = %v, 期望 1", got)
 	}
 }
 

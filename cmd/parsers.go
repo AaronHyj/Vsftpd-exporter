@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -30,11 +31,13 @@ var (
 type ExporterState struct {
 	lastProcessedTime time.Time
 	lastPosition      int64
+	lastInode         uint64
 
 	totalBytesUploaded   int64
 	totalBytesDownloaded int64
 
 	vsftpLogPosition int64
+	vsftpLogInode    uint64
 
 	clientLastActivity map[string]time.Time
 	clientConnectTimes map[string]time.Time
@@ -44,11 +47,6 @@ type ExporterState struct {
 	// probeClientIP 记录健康检查探测连接的来源 IP，用于 summary_exclude 时过滤探测事件。
 	probeClientIP string
 
-	// typeEventsMu 保护 vsftp_files_by_type_total 的冷启动提交状态。
-	// 计数器标签系列在首次 Inc() 之前从未有 0 采样点，increase() 无法观测到出生时的
-	// 0→1 首次增量。因此在首次见到某 (file_type, direction) 时先用 Add(0) 注册 0 值系列，
-	// 计数暂存于 pending，待下一次 /metrics 抓取（scrapeSeq 递增）之后才提交到计数器，
-	// 保证 0 采样点先于首次增量存在于时间序列中。
 	typeEventsMu        sync.Mutex
 	scrapeSeq           int64
 	pendingTypeCounts   map[string]int64
@@ -73,33 +71,74 @@ func NewExporterState() *ExporterState {
 	}
 }
 
-func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([]string, int64, error) {
+func getFileInode(fileInfo os.FileInfo) uint64 {
+	if fileInfo == nil {
+		return 0
+	}
+	if sys, ok := fileInfo.Sys().(*syscall.Stat_t); ok {
+		return uint64(sys.Ino)
+	}
+	return 0
+}
+
+func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64, lastInode uint64) ([]string, int64, uint64, error) {
 	if sshMgr == nil {
-		return readLocalFile(filePath, startPosition)
+		return readLocalFile(filePath, startPosition, lastInode)
 	}
 
-	slog.Debug("通过SSH读取文件", "path", filePath)
+	slog.Debug("通过SSH读取文件", "path", filePath, "start_position", startPosition, "last_inode", lastInode)
 
 	if !isValidFilePath(filePath) {
-		return nil, 0, fmt.Errorf("文件路径包含非法字符: %s", filePath)
+		return nil, 0, lastInode, fmt.Errorf("文件路径包含非法字符: %s", filePath)
 	}
 
-	var command string
-	if startPosition > 0 {
-		command = fmt.Sprintf("s=$(stat -c %%s '%s' 2>/dev/null || echo 0); if [ \"$s\" -lt %d ]; then echo ROTATED; cat '%s' 2>/dev/null | head -n %d; else echo OK; tail -c +%d '%s' 2>/dev/null | head -n %d; fi", filePath, startPosition, filePath, maxLinesPerRead, startPosition+1, filePath, maxLinesPerRead)
-	} else {
-		command = fmt.Sprintf("echo OK; cat '%s' 2>/dev/null | head -n %d", filePath, maxLinesPerRead)
-	}
+	command := fmt.Sprintf(`fp='%s'
+start_pos=%d
+last_ino=%d
+max_lines=%d
+
+read cur_size cur_ino <<< $(stat -c "%%s %%i" "$fp" 2>/dev/null || echo "0 0")
+
+rotated=0
+if [ "$last_ino" -ne 0 ] && [ "$cur_ino" -ne "$last_ino" ]; then
+    rotated=1
+elif [ "$cur_size" -lt "$start_pos" ]; then
+    rotated=1
+fi
+
+if [ "$rotated" -eq 1 ]; then
+    rp="${fp}.1"
+    read rot_size rot_ino <<< $(stat -c "%%s %%i" "$rp" 2>/dev/null || echo "0 0")
+    if [ "$rot_size" -gt "$start_pos" ]; then
+        echo "ROTATED_OLD $rot_ino"
+        tail -c +$((start_pos + 1)) "$rp" 2>/dev/null | head -n $max_lines
+    else
+        echo "ROTATED_NEW $cur_ino"
+        head -n $max_lines "$fp" 2>/dev/null
+    fi
+else
+    echo "OK $cur_ino"
+    if [ "$start_pos" -gt 0 ]; then
+        tail -c +$((start_pos + 1)) "$fp" 2>/dev/null | head -n $max_lines
+    else
+        head -n $max_lines "$fp" 2>/dev/null
+    fi
+fi`, filePath, startPosition, lastInode, maxLinesPerRead)
 
 	rawOutput, err := sshMgr.Execute(command)
 	if err != nil {
-		return nil, 0, fmt.Errorf("执行SSH命令失败: %w", err)
+		return nil, 0, lastInode, fmt.Errorf("执行SSH命令失败: %w", err)
 	}
 
 	header, content, _ := strings.Cut(rawOutput, "\n")
-	if header == "ROTATED" {
-		slog.Warn("检测到远程日志轮转，从头开始读取", "last_position", startPosition, "path", filePath)
-		startPosition = 0
+	parts := strings.Fields(header)
+	status := ""
+	var curInode uint64
+	if len(parts) >= 1 {
+		status = parts[0]
+	}
+	if len(parts) >= 2 {
+		curInode, _ = strconv.ParseUint(parts[1], 10, 64)
 	}
 
 	hasTrailingNewline := strings.HasSuffix(content, "\n")
@@ -116,29 +155,70 @@ func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64) ([
 		consumedBytes -= lastLineLen
 	}
 
-	newPosition := startPosition + consumedBytes
-	slog.Debug("SSH读取文件成功", "lines", len(lines), "position", newPosition)
-	return lines, newPosition, nil
+	var newPosition int64
+	var newInode uint64
+
+	switch status {
+	case "ROTATED_OLD":
+		slog.Warn("检测到远程日志轮转，先读取已轮转日志剩余内容", "path", filePath+".1", "last_position", startPosition)
+		newPosition = startPosition + consumedBytes
+		newInode = lastInode
+	case "ROTATED_NEW":
+		slog.Warn("检测到远程日志轮转，从新文件开头读取", "path", filePath, "last_position", startPosition)
+		newPosition = consumedBytes
+		newInode = curInode
+	default: // OK
+		newPosition = startPosition + consumedBytes
+		newInode = curInode
+	}
+
+	slog.Debug("SSH读取文件成功", "lines", len(lines), "position", newPosition, "inode", newInode)
+	return lines, newPosition, newInode, nil
 }
 
-func readLocalFile(filePath string, startPosition int64) ([]string, int64, error) {
-	file, err := os.Open(filePath)
+func readLocalFile(filePath string, startPosition int64, lastInode uint64) ([]string, int64, uint64, error) {
+	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		return nil, 0, fmt.Errorf("打开本地文件失败: %w", err)
+		return nil, 0, lastInode, fmt.Errorf("打开本地文件失败: %w", err)
+	}
+	curSize := fileInfo.Size()
+	curInode := getFileInode(fileInfo)
+
+	rotated := false
+	if lastInode != 0 && curInode != lastInode {
+		rotated = true
+	} else if curSize < startPosition {
+		rotated = true
+	}
+
+	readPath := filePath
+	readPos := startPosition
+	targetInode := curInode
+
+	if rotated {
+		rotatedPath := filePath + ".1"
+		rotInfo, err := os.Stat(rotatedPath)
+		if err == nil && rotInfo.Size() > startPosition {
+			slog.Warn("检测到日志轮转，先读取已轮转日志剩余内容", "path", rotatedPath, "last_position", startPosition)
+			readPath = rotatedPath
+			readPos = startPosition
+			targetInode = lastInode
+		} else {
+			slog.Warn("检测到日志轮转，从新文件开头读取", "path", filePath, "last_position", startPosition)
+			readPath = filePath
+			readPos = 0
+			targetInode = curInode
+		}
+	}
+
+	file, err := os.Open(readPath)
+	if err != nil {
+		return nil, 0, lastInode, fmt.Errorf("打开本地文件失败: %w", err)
 	}
 	defer file.Close()
 
-	fileInfo, err := file.Stat()
-	if err != nil {
-		return nil, 0, fmt.Errorf("获取文件信息失败: %w", err)
-	}
-	if fileInfo.Size() < startPosition {
-		slog.Warn("检测到日志轮转，从头开始读取", "file_size", fileInfo.Size(), "last_position", startPosition, "path", filePath)
-		startPosition = 0
-	}
-
-	if _, err := file.Seek(startPosition, 0); err != nil {
-		return nil, 0, fmt.Errorf("定位文件位置失败: %w", err)
+	if _, err := file.Seek(readPos, 0); err != nil {
+		return nil, 0, lastInode, fmt.Errorf("定位文件位置失败: %w", err)
 	}
 
 	var lines []string
@@ -158,15 +238,15 @@ func readLocalFile(filePath string, startPosition int64) ([]string, int64, error
 			if err == io.EOF {
 				break
 			}
-			return nil, 0, fmt.Errorf("读取文件失败: %w", err)
+			return nil, 0, lastInode, fmt.Errorf("读取文件失败: %w", err)
 		}
 		if len(lines) >= maxLinesPerRead {
 			break
 		}
 	}
 
-	newPosition := startPosition + bytesRead
-	return lines, newPosition, nil
+	newPosition := readPos + bytesRead
+	return lines, newPosition, targetInode, nil
 }
 
 func parseStandardXferlog(line string) (eventTime time.Time, direction string, clientIP string, fileSize int64, filePath string, transferTime int, username string, completed bool) {
@@ -210,41 +290,35 @@ func extractFileExtension(filePath string) string {
 	return ext
 }
 
-// recordTypeEvent 记录一次按后缀和方向的文件传输。已提交的标签直接 Inc()；
-// 首次见到的标签先用 Add(0) 注册 0 值系列并暂存计数，待抓取到 0 采样后再提交，
-// 使 increase()[$__range] 能观测到该标签的首次增量。
+// recordTypeEvent 记录一次按后缀和方向的文件传输。
+// 首次见到的标签先用 Add(0) 注册 0 值系列，随后直接 Inc()。
 func (s *ExporterState) recordTypeEvent(fileType, direction string) {
 	key := fileType + "\x00" + direction
 	s.typeEventsMu.Lock()
 	defer s.typeEventsMu.Unlock()
-	if s.committedTypeLabels[key] {
-		filesByTypeTotal.WithLabelValues(fileType, direction).Inc()
-		return
-	}
-	if s.pendingTypeCounts[key] == 0 {
+	if !s.committedTypeLabels[key] {
 		filesByTypeTotal.WithLabelValues(fileType, direction).Add(0)
-		s.pendingTypeSeq[key] = s.scrapeSeq
+		s.committedTypeLabels[key] = true
 	}
-	s.pendingTypeCounts[key]++
+	filesByTypeTotal.WithLabelValues(fileType, direction).Inc()
 }
 
-// commitPendingTypeEvents 在每次解析轮次结束时调用：将"已在至少一次抓取中暴露 0 值"的
-// 暂存计数提交到计数器，此后该标签的增量直接走 Inc()。
 func (s *ExporterState) commitPendingTypeEvents() {
 	s.typeEventsMu.Lock()
 	defer s.typeEventsMu.Unlock()
 	for key, n := range s.pendingTypeCounts {
-		if s.pendingTypeSeq[key] < s.scrapeSeq {
-			fileType, direction, _ := strings.Cut(key, "\x00")
-			filesByTypeTotal.WithLabelValues(fileType, direction).Add(float64(n))
-			delete(s.pendingTypeCounts, key)
-			delete(s.pendingTypeSeq, key)
+		fileType, direction, _ := strings.Cut(key, "\x00")
+		if !s.committedTypeLabels[key] {
+			filesByTypeTotal.WithLabelValues(fileType, direction).Add(0)
 			s.committedTypeLabels[key] = true
 		}
+		filesByTypeTotal.WithLabelValues(fileType, direction).Add(float64(n))
+		delete(s.pendingTypeCounts, key)
+		delete(s.pendingTypeSeq, key)
 	}
 }
 
-// bumpScrapeSeq 在每次 /metrics 抓取完成后调用，标记新一次抓取已发生。
+// bumpScrapeSeq 在每次 /metrics 抓取完成后调用。
 func (s *ExporterState) bumpScrapeSeq() {
 	s.typeEventsMu.Lock()
 	s.scrapeSeq++
@@ -267,108 +341,125 @@ func parseXferlogTimestamp(timeStr string) (time.Time, error) {
 }
 
 func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error {
-	slog.Debug("开始解析FTP日志文件", "path", logPath, "position", state.lastPosition)
+	slog.Debug("开始解析FTP日志文件", "path", logPath, "position", state.lastPosition, "inode", state.lastInode)
 
-	lines, newPosition, err := readRemoteFile(sshMgr, logPath, state.lastPosition)
-	if err != nil {
-		return fmt.Errorf("读取日志文件失败: %w", err)
-	}
+	totalLinesProcessed := 0
+	totalUploads := 0
+	totalDownloads := 0
+	totalIncomplete := 0
 
-	linesProcessed := 0
-	uploadCount := 0
-	downloadCount := 0
-	incompleteCount := 0
+	for {
+		lines, newPosition, newInode, err := readRemoteFile(sshMgr, logPath, state.lastPosition, state.lastInode)
+		if err != nil {
+			return fmt.Errorf("读取日志文件失败: %w", err)
+		}
 
-	totalBytesThisRound := int64(0)
-	var earliestTime, latestTime time.Time
+		state.lastPosition = newPosition
+		state.lastInode = newInode
 
-	for _, line := range lines {
-		if linesProcessed >= maxLinesPerRead {
+		if len(lines) == 0 {
 			break
 		}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+		linesProcessed := 0
+		uploadCount := 0
+		downloadCount := 0
+		incompleteCount := 0
 
-		linesProcessed++
+		totalBytesThisRound := int64(0)
+		var earliestTime, latestTime time.Time
 
-		eventTime, direction, clientIP, fileSize, filePath, transferTime, _, completed := parseStandardXferlog(line)
-		if direction == "" {
-			continue
-		}
-
-		// 记录本轮日志的时间范围
-		if !eventTime.IsZero() {
-			if earliestTime.IsZero() || eventTime.Before(earliestTime) {
-				earliestTime = eventTime
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
 			}
-			if latestTime.IsZero() || eventTime.After(latestTime) {
-				latestTime = eventTime
-			}
-		}
 
-		if !completed {
-			incompleteCount++
+			linesProcessed++
+
+			eventTime, direction, clientIP, fileSize, filePath, transferTime, _, completed := parseStandardXferlog(line)
+			if direction == "" {
+				continue
+			}
+
+			// 记录本轮日志的时间范围
+			if !eventTime.IsZero() {
+				if earliestTime.IsZero() || eventTime.Before(earliestTime) {
+					earliestTime = eventTime
+				}
+				if latestTime.IsZero() || eventTime.After(latestTime) {
+					latestTime = eventTime
+				}
+			}
+
+			if !completed {
+				incompleteCount++
+				if direction == "i" {
+					transferErrorsTotal.WithLabelValues("upload").Inc()
+				} else {
+					transferErrorsTotal.WithLabelValues("download").Inc()
+				}
+				continue
+			}
+
+			// 按方向更新指标
+			var dirLabel string
 			if direction == "i" {
-				transferErrorsTotal.WithLabelValues("upload").Inc()
+				uploadCount++
+				ftpUploadTotal.Inc()
+				uploadBytesTotal.Add(float64(fileSize))
+				state.totalBytesUploaded += fileSize
+				dirLabel = "upload"
 			} else {
-				transferErrorsTotal.WithLabelValues("download").Inc()
+				downloadCount++
+				ftpDownloadTotal.Inc()
+				downloadBytesTotal.Add(float64(fileSize))
+				state.totalBytesDownloaded += fileSize
+				dirLabel = "download"
 			}
-			continue
+
+			totalBytesThisRound += fileSize
+
+			if clientIP != "" {
+				clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
+			}
+			ext := extractFileExtension(filePath)
+			state.recordTypeEvent(ext, dirLabel)
+			if transferTime > 0 {
+				transferDurationSeconds.Observe(float64(transferTime))
+			}
 		}
 
-		// 按方向更新指标
-		var dirLabel string
-		if direction == "i" {
-			uploadCount++
-			ftpUploadTotal.Inc()
-			uploadBytesTotal.Add(float64(fileSize))
-			state.totalBytesUploaded += fileSize
-			dirLabel = "upload"
-		} else {
-			downloadCount++
-			ftpDownloadTotal.Inc()
-			downloadBytesTotal.Add(float64(fileSize))
-			state.totalBytesDownloaded += fileSize
-			dirLabel = "download"
+		// 带宽计算：基于日志时间范围
+		if !earliestTime.IsZero() && !latestTime.IsZero() {
+			logTimeDiff := latestTime.Sub(earliestTime).Seconds()
+			if logTimeDiff > 0 {
+				bandwidthUsage.Set(float64(totalBytesThisRound) / logTimeDiff)
+			}
+		} else if totalBytesThisRound == 0 {
+			bandwidthUsage.Set(0)
 		}
 
-		totalBytesThisRound += fileSize
-
-		if clientIP != "" {
-			clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
+		// 平均传输速度：基于程序运行以来的总量
+		totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
+		programRunTime := time.Since(state.lastProcessedTime).Seconds()
+		if totalBytes > 0 && programRunTime > 0 {
+			averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 		}
-		ext := extractFileExtension(filePath)
-		state.recordTypeEvent(ext, dirLabel)
-		if transferTime > 0 {
-			transferDurationSeconds.Observe(float64(transferTime))
+
+		totalLinesProcessed += linesProcessed
+		totalUploads += uploadCount
+		totalDownloads += downloadCount
+		totalIncomplete += incompleteCount
+
+		if len(lines) < maxLinesPerRead {
+			break
 		}
-	}
-
-	state.lastPosition = newPosition
-
-	// 带宽计算：基于日志时间范围
-	if !earliestTime.IsZero() && !latestTime.IsZero() {
-		logTimeDiff := latestTime.Sub(earliestTime).Seconds()
-		if logTimeDiff > 0 {
-			bandwidthUsage.Set(float64(totalBytesThisRound) / logTimeDiff)
-		}
-	} else if totalBytesThisRound == 0 {
-		bandwidthUsage.Set(0)
-	}
-
-	// 平均传输速度：基于程序运行以来的总量
-	totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
-	programRunTime := time.Since(state.lastProcessedTime).Seconds()
-	if totalBytes > 0 && programRunTime > 0 {
-		averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 	}
 
 	state.commitPendingTypeEvents()
 
-	slog.Debug("FTP日志解析完成", "lines", linesProcessed, "uploads", uploadCount, "downloads", downloadCount, "incomplete", incompleteCount)
+	slog.Debug("FTP日志解析完成", "lines", totalLinesProcessed, "uploads", totalUploads, "downloads", totalDownloads, "incomplete", totalIncomplete)
 	return nil
 }
 
@@ -419,184 +510,201 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		return nil
 	}
 
-	slog.Debug("开始解析vsftpd日志文件", "path", logPath)
+	slog.Debug("开始解析vsftpd日志文件", "path", logPath, "position", state.vsftpLogPosition, "inode", state.vsftpLogInode)
 
-	lines, newPosition, err := readRemoteFile(sshMgr, logPath, state.vsftpLogPosition)
-	if err != nil {
-		return fmt.Errorf("读取vsftpd日志文件失败: %w", err)
-	}
+	totalLinesProcessed := 0
+	totalConnects := 0
+	totalLoginsOK := 0
+	totalLoginsFail := 0
 
-	state.vsftpLogPosition = newPosition
+	for {
+		lines, newPosition, newInode, err := readRemoteFile(sshMgr, logPath, state.vsftpLogPosition, state.vsftpLogInode)
+		if err != nil {
+			return fmt.Errorf("读取vsftpd日志文件失败: %w", err)
+		}
 
-	linesProcessed := 0
-	connectCount := 0
-	loginOKCount := 0
-	loginFailCount := 0
-	currentTime := time.Now()
+		state.vsftpLogPosition = newPosition
+		state.vsftpLogInode = newInode
 
-	for _, line := range lines {
-		if linesProcessed >= maxLinesPerRead {
+		if len(lines) == 0 {
 			break
 		}
 
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+		linesProcessed := 0
+		connectCount := 0
+		loginOKCount := 0
+		loginFailCount := 0
+		currentTime := time.Now()
 
-		linesProcessed++
-
-		// CONNECT 事件
-		if matches := connectRegex.FindStringSubmatch(line); matches != nil {
-			eventTime, err := parseVsftpdTimestamp(matches[1])
-			if err != nil {
-				continue
-			}
-			processID := matches[2]
-			clientIP := matches[3]
-
-			// summary_exclude 开启时，忽略健康检查探测产生的连接
-			if config.SummaryExclude && state.probeClientIP != "" && clientIP == state.probeClientIP {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
 				continue
 			}
 
-			clientConnectionsTotal.WithLabelValues(clientIP).Inc()
-			connectCount++
+			linesProcessed++
 
-			state.clientLastActivity[clientIP] = eventTime
-			state.clientConnectTimes[clientIP] = eventTime
-			state.activeProcessIDs[processID] = eventTime
-
-			if lastConnect, exists := state.clientLastConnect[clientIP]; exists {
-				if eventTime.Sub(lastConnect).Seconds() <= 30 {
-					rapidReconnectionsTotal.Inc()
+			// CONNECT 事件
+			if matches := connectRegex.FindStringSubmatch(line); matches != nil {
+				eventTime, err := parseVsftpdTimestamp(matches[1])
+				if err != nil {
+					continue
 				}
-			}
-			state.clientLastConnect[clientIP] = eventTime
-			continue
-		}
+				processID := matches[2]
+				clientIP := matches[3]
 
-		// OK LOGIN 事件
-		if matches := loginOKRegex.FindStringSubmatch(line); matches != nil {
-			eventTime, err := parseVsftpdTimestamp(matches[1])
-			if err != nil {
-				continue
-			}
-			processID := matches[2]
-			username := matches[3]
-			clientIP := matches[4]
-
-			// summary_exclude 开启时，忽略健康检查探测账号的登录事件
-			if config.SummaryExclude && username == config.FTPUser {
-				continue
-			}
-
-			userLoginsTotal.WithLabelValues(username).Inc()
-			userConnectionsTotal.WithLabelValues(username).Inc()
-			ftpLoginTotal.Inc()
-			loginOKCount++
-
-			ftpLoginTime.Set(float64(eventTime.Unix()))
-
-			state.clientLastActivity[clientIP] = eventTime
-			state.activeProcessIDs[processID] = eventTime
-
-			if connectTime, exists := state.clientConnectTimes[clientIP]; exists {
-				delay := eventTime.Sub(connectTime).Seconds()
-				if delay >= 0 && delay <= 60 {
-					connectionLoginDelaySeconds.Observe(delay)
+				// summary_exclude 开启时，忽略健康检查探测产生的连接
+				if config.SummaryExclude && state.probeClientIP != "" && clientIP == state.probeClientIP {
+					continue
 				}
-			}
-			continue
-		}
 
-		// FAIL LOGIN 事件
-		if matches := loginFailRegex.FindStringSubmatch(line); matches != nil {
-			eventTime, err := parseVsftpdTimestamp(matches[1])
-			if err != nil {
-				continue
-			}
-			clientIP := matches[4]
+				clientConnectionsTotal.WithLabelValues(clientIP).Inc()
+				connectCount++
 
-			// 认证错误次数由下方 FTP response 530 行统计，避免同一事件重复计数
-			failedLoginsTotal.Inc()
-			loginFailCount++
+				state.clientLastActivity[clientIP] = eventTime
+				state.clientConnectTimes[clientIP] = eventTime
+				state.activeProcessIDs[processID] = eventTime
 
-			state.clientLastActivity[clientIP] = eventTime
-			continue
-		}
-
-		// OK UPLOAD 事件
-		if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
-			clientIP := matches[4]
-			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-				state.totalBytesUploaded += bytes
-				if config.LogFilePath == "" {
-					ftpUploadTotal.Inc()
-					uploadBytesTotal.Add(float64(bytes))
-					if clientIP != "" {
-						clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+				if lastConnect, exists := state.clientLastConnect[clientIP]; exists {
+					if eventTime.Sub(lastConnect).Seconds() <= 30 {
+						rapidReconnectionsTotal.Inc()
 					}
 				}
-			}
-			continue
-		}
-
-		// OK DOWNLOAD 事件
-		if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
-			clientIP := matches[4]
-			if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-				state.totalBytesDownloaded += bytes
-				if config.LogFilePath == "" {
-					ftpDownloadTotal.Inc()
-					downloadBytesTotal.Add(float64(bytes))
-					if clientIP != "" {
-						clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
-					}
-				}
-			}
-			continue
-		}
-
-		// FTP 协议错误响应（4xx / 5xx）
-		if matches := ftpResponseRegex.FindStringSubmatch(line); matches != nil {
-			parts := strings.SplitN(matches[4], " ", 2)
-			code := parts[0]
-			message := ""
-			if len(parts) > 1 {
-				message = parts[1]
-			}
-			if !strings.HasPrefix(code, "4") && !strings.HasPrefix(code, "5") {
+				state.clientLastConnect[clientIP] = eventTime
 				continue
 			}
 
-			reason := classifyFTPError(code, message)
-			ftpErrorsTotal.WithLabelValues(reason).Inc()
-			if code == "530" {
-				authenticationErrorsTotal.Inc()
+			// OK LOGIN 事件
+			if matches := loginOKRegex.FindStringSubmatch(line); matches != nil {
+				eventTime, err := parseVsftpdTimestamp(matches[1])
+				if err != nil {
+					continue
+				}
+				processID := matches[2]
+				username := matches[3]
+				clientIP := matches[4]
+
+				// summary_exclude 开启时，忽略健康检查探测账号的登录事件
+				if config.SummaryExclude && username == config.FTPUser {
+					continue
+				}
+
+				userLoginsTotal.WithLabelValues(username).Inc()
+				userConnectionsTotal.WithLabelValues(username).Inc()
+				ftpLoginTotal.Inc()
+				loginOKCount++
+
+				ftpLoginTime.Set(float64(eventTime.Unix()))
+
+				state.clientLastActivity[clientIP] = eventTime
+				state.activeProcessIDs[processID] = eventTime
+
+				if connectTime, exists := state.clientConnectTimes[clientIP]; exists {
+					delay := eventTime.Sub(connectTime).Seconds()
+					if delay >= 0 && delay <= 60 {
+						connectionLoginDelaySeconds.Observe(delay)
+					}
+				}
+				continue
 			}
-			if reason == "max_connections" {
-				maxConnectionsReachedTotal.Inc()
+
+			// FAIL LOGIN 事件
+			if matches := loginFailRegex.FindStringSubmatch(line); matches != nil {
+				eventTime, err := parseVsftpdTimestamp(matches[1])
+				if err != nil {
+					continue
+				}
+				clientIP := matches[4]
+
+				// 认证错误次数由下方 FTP response 530 行统计，避免同一事件重复计数
+				failedLoginsTotal.Inc()
+				loginFailCount++
+
+				state.clientLastActivity[clientIP] = eventTime
+				continue
 			}
-			continue
+
+			// OK UPLOAD 事件
+			if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
+				clientIP := matches[4]
+				if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
+					state.totalBytesUploaded += bytes
+					if config.LogFilePath == "" {
+						ftpUploadTotal.Inc()
+						uploadBytesTotal.Add(float64(bytes))
+						if clientIP != "" {
+							clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
+						}
+					}
+				}
+				continue
+			}
+
+			// OK DOWNLOAD 事件
+			if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
+				clientIP := matches[4]
+				if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
+					state.totalBytesDownloaded += bytes
+					if config.LogFilePath == "" {
+						ftpDownloadTotal.Inc()
+						downloadBytesTotal.Add(float64(bytes))
+						if clientIP != "" {
+							clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
+						}
+					}
+				}
+				continue
+			}
+
+			// FTP 协议错误响应（4xx / 5xx）
+			if matches := ftpResponseRegex.FindStringSubmatch(line); matches != nil {
+				parts := strings.SplitN(matches[4], " ", 2)
+				code := parts[0]
+				message := ""
+				if len(parts) > 1 {
+					message = parts[1]
+				}
+				if !strings.HasPrefix(code, "4") && !strings.HasPrefix(code, "5") {
+					continue
+				}
+
+				reason := classifyFTPError(code, message)
+				ftpErrorsTotal.WithLabelValues(reason).Inc()
+				if code == "530" {
+					authenticationErrorsTotal.Inc()
+				}
+				if reason == "max_connections" {
+					maxConnectionsReachedTotal.Inc()
+				}
+				continue
+			}
 		}
-	}
 
-	if currentTime.Sub(state.lastUniqueClientUpdate).Minutes() >= 1 {
-		updateUniqueClientsMetric(state, currentTime)
-		state.lastUniqueClientUpdate = currentTime
-	}
+		if currentTime.Sub(state.lastUniqueClientUpdate).Minutes() >= 1 {
+			updateUniqueClientsMetric(state, currentTime)
+			state.lastUniqueClientUpdate = currentTime
+		}
 
-	if currentTime.Sub(state.lastProcessUpdate).Minutes() >= 1 {
-		updateActiveProcessesMetric(state, currentTime)
-		state.lastProcessUpdate = currentTime
+		if currentTime.Sub(state.lastProcessUpdate).Minutes() >= 1 {
+			updateActiveProcessesMetric(state, currentTime)
+			state.lastProcessUpdate = currentTime
+		}
+
+		totalLinesProcessed += linesProcessed
+		totalConnects += connectCount
+		totalLoginsOK += loginOKCount
+		totalLoginsFail += loginFailCount
+
+		if len(lines) < maxLinesPerRead {
+			break
+		}
 	}
 
 	slog.Debug("vsftpd日志解析完成",
-		"lines", linesProcessed,
-		"connects", connectCount,
-		"logins_ok", loginOKCount,
-		"logins_fail", loginFailCount,
+		"lines", totalLinesProcessed,
+		"connects", totalConnects,
+		"logins_ok", totalLoginsOK,
+		"logins_fail", totalLoginsFail,
 	)
 	return nil
 }
