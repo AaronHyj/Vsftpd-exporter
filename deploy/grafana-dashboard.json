@@ -1043,6 +1043,132 @@
         "x": 0,
         "y": 26
       },
+      "id": 107,
+      "panels": [],
+      "title": "⚡ 带宽与速度指标",
+      "type": "row",
+      "fieldConfig": {
+        "defaults": {}
+      }
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "vsftpd 日志解析计算出的带宽(基于日志事件时间戳区间,单事件轮次不更新,见 bugrecord KNOWN-002)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "B/s",
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 28,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "expr": "vsftp_bandwidth_usage_bytes_per_second{job=\"$job\", instance=\"$instance\"}",
+          "legendFormat": "实时带宽",
+          "refId": "A"
+        }
+      ],
+      "title": "实时带宽 (B/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "从程序启动至今的总传输字节/总运行时长,见 bugrecord KNOWN-003",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 29,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "vsftp_average_transfer_speed_bytes_per_second{job=\"$job\", instance=\"$instance\"}",
+          "legendFormat": "平均传输速度",
+          "refId": "A"
+        }
+      ],
+      "title": "平均传输速度 (B/s)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
       "id": 102,
       "panels": [],
       "title": "⚠️ 错误与异常",
@@ -1081,7 +1207,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 27
+        "y": 32
       },
       "id": 17,
       "options": {
@@ -1137,7 +1263,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 27
+        "y": 32
       },
       "id": 18,
       "options": {
@@ -1193,7 +1319,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 27
+        "y": 32
       },
       "id": 19,
       "options": {
@@ -1249,7 +1375,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 27
+        "y": 32
       },
       "id": 20,
       "options": {
@@ -1305,7 +1431,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 27
+        "y": 32
       },
       "id": 21,
       "options": {
@@ -1358,7 +1484,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 36
       },
       "id": 22,
       "options": {
@@ -1392,9 +1518,14 @@
           "refId": "C"
         },
         {
-          "expr": "sum(rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\"}[5m])) * 60",
+          "expr": "sum by (job, instance) (rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\"}[5m])) * 60",
           "legendFormat": "传输错误",
           "refId": "D"
+        },
+        {
+          "expr": "sum by (job, instance) (rate(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\"}[5m])) * 60",
+          "legendFormat": "FTP 协议错误",
+          "refId": "E"
         }
       ],
       "title": "错误速率趋势 (次/分钟)",
@@ -1427,7 +1558,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 36
       },
       "id": 23,
       "options": {
@@ -1486,7 +1617,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 44
       },
       "id": 104,
       "options": {
@@ -1519,7 +1650,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 52
       },
       "id": 103,
       "panels": [],
@@ -1556,7 +1687,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 53
       },
       "id": 24,
       "options": {
@@ -1608,7 +1739,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 53
       },
       "id": 25,
       "options": {
@@ -1660,7 +1791,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 56
+        "y": 61
       },
       "id": 26,
       "options": {
@@ -1711,7 +1842,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 56
+        "y": 61
       },
       "id": 27,
       "options": {
@@ -1750,7 +1881,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 69
       },
       "id": 105,
       "panels": [],
@@ -1784,7 +1915,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 70
       },
       "id": 106,
       "options": {
@@ -1806,11 +1937,11 @@
         }
       },
       "targets": [
-{
-   "expr": "sum by (file_type) (increase(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[$__range]))",
-   "legendFormat": "{{file_type}}",
-   "refId": "A"
-  }
+        {
+          "expr": "sum by (file_type) (increase(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[$__range]))",
+          "legendFormat": "{{file_type}}",
+          "refId": "A"
+        }
       ],
       "title": "各后缀文件传输数量",
       "type": "bargauge"
@@ -1881,5 +2012,5 @@
   "timezone": "browser",
   "title": "Vsftpd FTP 服务器监控仪表盘",
   "uid": "vsftpd-exporter-dashboard",
-  "version": 2
+  "version": 3
 }

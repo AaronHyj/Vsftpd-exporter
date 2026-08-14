@@ -293,7 +293,7 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_download_total` | Counter | 下载操作总次数 |
 | `vsftp_upload_bytes_total` | Counter | 上传字节总数 |
 | `vsftp_download_bytes_total` | Counter | 下载字节总数 |
-| `vsftp_transfer_duration_seconds` | Histogram | 传输耗时分布（桶: 0.1s~102.4s 指数分布） |
+| `vsftp_transfer_duration_seconds` | Histogram | 传输耗时分布（桶: 0.1s~51.2s 指数分布） |
 | `vsftp_average_transfer_speed_bytes_per_second` | Gauge | 平均传输速度（字节/秒） |
 | `vsftp_bandwidth_usage_bytes_per_second` | Gauge | 当前带宽使用率（字节/秒） |
 | `vsftp_last_login_time` | Gauge | 最后成功登录的 Unix 时间戳 |
@@ -378,6 +378,7 @@ scrape_configs:
 | FrequentAuthenticationErrors | warning | 认证错误率 > 5 次/分钟（可能暴力破解） |
 | RapidReconnections | info | 快速重连率 > 10 次/分钟 |
 | HighBandwidthUsage | info | 带宽 > 100 MB/s |
+| HighFTPErrorRate | warning | 5 分钟内 FTP 协议错误率 > 5 次/分钟(全部原因合计) |
 | MaxConnectionsReached | warning | 达到最大连接数限制 |
 | VsftpExporterDown | critical | Exporter 自身不可用超过 2 分钟 |
 

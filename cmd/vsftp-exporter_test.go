@@ -430,6 +430,7 @@ func TestFTPResponseRegex(t *testing.T) {
 		name        string
 		line        string
 		shouldMatch bool
+		username    string
 		code        string
 		message     string
 	}{
@@ -437,6 +438,7 @@ func TestFTPResponseRegex(t *testing.T) {
 			name:        "530 密码错误响应",
 			line:        `Sun Aug  9 16:34:51 2026 [pid 1234] [ftpuser] FTP response: Client "192.168.1.100", "530 Login incorrect."`,
 			shouldMatch: true,
+			username:    "ftpuser",
 			code:        "530",
 			message:     "Login incorrect.",
 		},
@@ -444,6 +446,7 @@ func TestFTPResponseRegex(t *testing.T) {
 			name:        "421 连接数过多响应",
 			line:        `Sun Aug  9 16:34:51 2026 [pid 1234] [] FTP response: Client "192.168.1.100", "421 There are too many connections from your internet address."`,
 			shouldMatch: true,
+			username:    "",
 			code:        "421",
 			message:     "There are too many connections from your internet address.",
 		},
@@ -451,6 +454,7 @@ func TestFTPResponseRegex(t *testing.T) {
 			name:        "550 目录不存在响应",
 			line:        `Sun Aug  9 16:34:51 2026 [pid 1234] [ftpuser] FTP response: Client "192.168.1.100", "550 Failed to change directory."`,
 			shouldMatch: true,
+			username:    "ftpuser",
 			code:        "550",
 			message:     "Failed to change directory.",
 		},
@@ -458,6 +462,7 @@ func TestFTPResponseRegex(t *testing.T) {
 			name:        "成功响应 230 不应视为错误",
 			line:        `Sun Aug  9 16:34:51 2026 [pid 1234] [ftpuser] FTP response: Client "192.168.1.100", "230 Login successful."`,
 			shouldMatch: true,
+			username:    "ftpuser",
 			code:        "230",
 			message:     "Login successful.",
 		},
@@ -475,8 +480,11 @@ func TestFTPResponseRegex(t *testing.T) {
 				if matches == nil {
 					t.Fatalf("正则应匹配: %s", tt.line)
 				}
-				if len(matches) < 5 || matches[4] != tt.code+" "+tt.message {
-					t.Errorf("提取的响应 = %q, 期望 %q", matches[4], tt.code+" "+tt.message)
+				if len(matches) < 6 || matches[5] != tt.code+" "+tt.message {
+					t.Errorf("提取的响应 = %q, 期望 %q", matches[5], tt.code+" "+tt.message)
+				}
+				if matches[3] != tt.username {
+					t.Errorf("提取的用户名 = %q, 期望 %q", matches[3], tt.username)
 				}
 			} else if matches != nil {
 				t.Fatalf("正则不应匹配: %s", tt.line)
@@ -568,6 +576,27 @@ func TestParseSSOutputNoMatch(t *testing.T) {
 	total, established, closeWait := parseSSOutput(output, "6069")
 	if total != 0 || established != 0 || closeWait != 0 {
 		t.Errorf("不应匹配任何连接: total=%d established=%d closeWait=%d", total, established, closeWait)
+	}
+}
+
+// TestParseSSOutputSkipsListenSockets 验证 LISTEN 监听套接字不计入连接数(BUG-043)。
+// ss -tnH 输出中监听套接字本地地址以 FTP 端口结尾,但它是监听端点而非连接。
+func TestParseSSOutputSkipsListenSockets(t *testing.T) {
+	output := strings.Join([]string{
+		`LISTEN   0      128      0.0.0.0:6069                  0.0.0.0:*`,
+		`LISTEN   0      128      [::]:6069                    [::]:*`,
+		`ESTAB    0      0        172.25.234.200:6069           172.25.234.161:50699`,
+		`CLOSE-WAIT 15   0        ::ffff:172.25.234.200:43510   ::ffff:172.25.234.200:6069`,
+	}, "\n")
+	total, established, closeWait := parseSSOutput(output, "6069")
+	if total != 2 {
+		t.Errorf("total = %d, 期望 2(仅 ESTAB 与 CLOSE-WAIT,LISTEN 不计入)", total)
+	}
+	if established != 1 {
+		t.Errorf("established = %d, 期望 1", established)
+	}
+	if closeWait != 1 {
+		t.Errorf("closeWait = %d, 期望 1", closeWait)
 	}
 }
 
@@ -761,5 +790,62 @@ Sun Aug  9 16:34:55 2026 [pid 1003] CONNECT: Client "192.168.1.100"
 	}
 	if reconn != 1 {
 		t.Errorf("exclude=false: 快速重连增量 = %v, 期望 1", reconn)
+	}
+}
+
+// TestFTPResponseSummaryExcludeByUsername 验证 summary_exclude 开启时,
+// 探测账号(ftp_user)的 FTP response 错误按用户名被过滤(BUG-046),
+// 即使探测来源 IP 与日志中 Client IP 不一致(NAT 场景)。
+func TestFTPResponseSummaryExcludeByUsername(t *testing.T) {
+	logContent := `Sun Aug  9 16:34:50 2026 [pid 1001] [ostore] FAIL LOGIN: Client "10.0.0.5"
+Sun Aug  9 16:34:51 2026 [pid 1001] [ostore] FTP response: Client "10.0.0.5", "530 Login incorrect."
+Sun Aug  9 16:34:52 2026 [pid 1002] [alice] FTP response: Client "192.168.1.101", "550 Failed to change directory."
+Sun Aug  9 16:34:53 2026 [pid 1003] [bob] FTP response: Client "192.168.1.102", "530 Login incorrect."
+`
+	path := filepath.Join(t.TempDir(), "vsftpd.log")
+	if err := os.WriteFile(path, []byte(logContent), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	run := func(exclude bool) (failed, authFailed, dirNotFound float64) {
+		beforeFail := testutil.ToFloat64(failedLoginsTotal)
+		beforeAuthFailed := testutil.ToFloat64(ftpErrorsTotal.WithLabelValues("auth_failed"))
+		beforeDir := testutil.ToFloat64(ftpErrorsTotal.WithLabelValues("dir_not_found"))
+
+		cfg := &Config{FTPUser: "ostore", SummaryExclude: exclude}
+		state := NewExporterState()
+		// 模拟 NAT 场景:探测来源 IP 与日志中 Client IP 不同(10.0.0.5 vs 探测本地 IP)
+		state.probeClientIP = "172.25.234.200"
+		if err := parseVsftpdLog(cfg, path, state, nil); err != nil {
+			t.Fatalf("parseVsftpdLog 失败: %v", err)
+		}
+		return testutil.ToFloat64(failedLoginsTotal) - beforeFail,
+			testutil.ToFloat64(ftpErrorsTotal.WithLabelValues("auth_failed")) - beforeAuthFailed,
+			testutil.ToFloat64(ftpErrorsTotal.WithLabelValues("dir_not_found")) - beforeDir
+	}
+
+	// exclude=true:ostore 的 FAIL LOGIN 与 530 response 均被过滤(按用户名),
+	// alice 的 550 与 bob 的 530 计入
+	failed, authFailed, dirNotFound := run(true)
+	if failed != 0 {
+		t.Errorf("exclude=true: failedLoginsTotal 增量 = %v, 期望 0(ostore 按用户名过滤)", failed)
+	}
+	if authFailed != 1 {
+		t.Errorf("exclude=true: auth_failed 增量 = %v, 期望 1(仅 bob)", authFailed)
+	}
+	if dirNotFound != 1 {
+		t.Errorf("exclude=true: dir_not_found 增量 = %v, 期望 1(alice)", dirNotFound)
+	}
+
+	// exclude=false:全部计入
+	failed, authFailed, dirNotFound = run(false)
+	if failed != 1 {
+		t.Errorf("exclude=false: failedLoginsTotal 增量 = %v, 期望 1", failed)
+	}
+	if authFailed != 2 {
+		t.Errorf("exclude=false: auth_failed 增量 = %v, 期望 2(ostore+bob)", authFailed)
+	}
+	if dirNotFound != 1 {
+		t.Errorf("exclude=false: dir_not_found 增量 = %v, 期望 1", dirNotFound)
 	}
 }

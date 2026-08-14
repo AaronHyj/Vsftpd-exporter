@@ -15,7 +15,7 @@ groups:
 
       # 登录失败率过高告警
       - alert: HighFailedLoginRate
-        expr: rate(vsftp_failed_logins_total[5m]) > 10
+        expr: rate(vsftp_failed_logins_total[5m]) * 60 > 10
         for: 5m
         labels:
           severity: warning
@@ -26,14 +26,14 @@ groups:
 
       # 传输错误率过高告警
       - alert: HighTransferErrorRate
-        expr: rate(vsftp_transfer_errors_total[5m]) > 5
+        expr: sum by (job, instance) (rate(vsftp_transfer_errors_total[5m]) * 60) > 5
         for: 5m
         labels:
           severity: warning
           service: vsftpd
         annotations:
           summary: "FTP 传输错误率过高"
-          description: "实例 {{ $labels.instance }} 在过去 5 分钟内传输错误率超过 5 次/分钟，错误类型: {{ $labels.type }}"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内传输错误率超过 5 次/分钟(全部类型合计)"
 
       # 连接数过高告警
       - alert: HighConnectionCount
@@ -59,7 +59,7 @@ groups:
 
       # 连接超时频繁告警
       - alert: FrequentConnectionTimeouts
-        expr: rate(vsftp_connection_timeouts_total[5m]) > 3
+        expr: rate(vsftp_connection_timeouts_total[5m]) * 60 > 3
         for: 5m
         labels:
           severity: warning
@@ -70,7 +70,7 @@ groups:
 
       # 认证错误频繁告警
       - alert: FrequentAuthenticationErrors
-        expr: rate(vsftp_authentication_errors_total[5m]) > 5
+        expr: rate(vsftp_authentication_errors_total[5m]) * 60 > 5
         for: 5m
         labels:
           severity: warning
@@ -81,7 +81,7 @@ groups:
 
       # 快速重连异常告警
       - alert: RapidReconnections
-        expr: rate(vsftp_rapid_reconnections_total[5m]) > 10
+        expr: rate(vsftp_rapid_reconnections_total[5m]) * 60 > 10
         for: 5m
         labels:
           severity: info
@@ -90,20 +90,31 @@ groups:
           summary: "快速重连异常"
           description: "实例 {{ $labels.instance }} 在过去 5 分钟内快速重连率超过 10 次/分钟"
 
-      # 带宽使用率过高告警
+      # 带宽使用率过高告警(基于计数器 rate,避免单事件轮次语义缺陷,见 bugrecord KNOWN-002)
       - alert: HighBandwidthUsage
-        expr: vsftp_bandwidth_usage_bytes_per_second > 100000000  # 100 MB/s
+        expr: rate(vsftp_upload_bytes_total[5m]) + rate(vsftp_download_bytes_total[5m]) > 104857600  # 100 MB/s
         for: 5m
         labels:
           severity: info
           service: vsftpd
         annotations:
           summary: "带宽使用率过高"
-          description: "实例 {{ $labels.instance }} 的带宽使用率为 {{ $value | humanize }}B/s，超过 100 MB/s"
+          description: "实例 {{ $labels.instance }} 的传输带宽为 {{ $value | humanize }}B/s,超过 100 MB/s"
+
+      # FTP 协议错误率过高告警
+      - alert: HighFTPErrorRate
+        expr: sum by (job, instance) (rate(vsftp_ftp_errors_total[5m]) * 60) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "FTP 协议错误率过高"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内 FTP 协议错误率超过 5 次/分钟(全部原因合计)"
 
       # 达到最大连接数限制告警
       - alert: MaxConnectionsReached
-        expr: rate(vsftp_max_connections_reached_total[5m]) > 0
+        expr: rate(vsftp_max_connections_reached_total[5m]) * 60 > 0
         for: 2m
         labels:
           severity: warning

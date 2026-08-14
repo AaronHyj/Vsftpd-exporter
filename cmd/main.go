@@ -86,6 +86,10 @@ func checkFTPLogin(config *Config) (probeIP string, err error) {
 
 	ftpConn, err := ftp.Dial(config.TargetHost+":"+config.FTPPort, ftp.DialWithNetConn(conn), ftp.DialWithTimeout(10*time.Second))
 	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			connectionTimeoutsTotal.Inc()
+		}
 		conn.Close()
 		return probeIP, fmt.Errorf("初始化FTP连接失败: %w", err)
 	}

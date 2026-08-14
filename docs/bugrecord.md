@@ -4,10 +4,10 @@
 
 ## 审查信息
 
-- 审查日期：2026-08-07（第一轮）/ 2026-08-07（第二轮）/ 2026-08-09（第三轮深度审查与修复）
-- 审查范围：`cmd/` 全部源码（main.go / config.go / metrics.go / ssh.go / parsers.go / tests）及 Makefile
-- 审查重点：登录探测与采样污染、SSH读取性能与轮转、文件名包含空格解析、未换行半行保护、健康检查与死代码死字段清理
-- 验证命令：`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -v -race ./...`
+- 审查日期:2026-08-07(第一轮)/ 2026-08-07(第二轮)/ 2026-08-09(第三轮深度审查与修复)/ 2026-08-12(第四轮全面审查与修复)/ 2026-08-12(第五轮复查:连接数监听套接字污染、FTP握手超时计数、README 告警文档同步)/ 2026-08-12(第六轮复查:README 桶范围错误、FTP response 正则捕获用户名、NAT CONNECT 过滤限制)/ 2026-08-12(第七至十轮深度复查:并发安全、PromQL 语义、过滤条件优先级、四方一致性、冗余指标、测试隔离)
+- 审查范围:`cmd/` 全部源码(main.go / config.go / metrics.go / ssh.go / parsers.go / tests)、Makefile、`deploy/grafana-dashboard.json`、`deploy/alerts.yml.example`、`docs/bugrecord.md`、`README.md`
+- 审查重点:仪表盘指标覆盖完整性、告警规则聚合正确性、summary_exclude 遗漏、活跃度指标静默期衰减、带宽告警改用 PromQL rate、仪表盘新增面板、连接数指标误计监听套接字、FTP 握手超时计数、README 与告警规则一致性、README 桶范围描述错误、FTP response 正则捕获用户名增强、NAT CONNECT 过滤限制
+- 验证命令:`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -v -race ./...`、`python3 -c "import json; json.load(open('deploy/grafana-dashboard.json'))"`
 
 ## Bug 列表
 
@@ -43,6 +43,22 @@
 | BUG-028 | 中 | `cmd/parsers.go` readLocalFile / readRemoteFile | 在读取到达文件末尾（EOF）时若 vsftpd 正在写入半行日志（无换行符 `\n`），会将半行日志消费并推进文件 position，导致下一轮日志拼接断裂并丢失事件 | 已修复 |
 | BUG-029 | 低 | `cmd/parsers.go` loginFailRegex | 用户名中括号正则表达式使用 `+` (`\[([^\]]+)\]`)，导致匿名或未提供用户名失败登录产生 `[]` 时无法匹配 | 已修复 |
 | BUG-030 | 中 | `cmd/parsers.go` parseVsftpdLog | 同一失败登录的 `FAIL LOGIN` 与 `FTP response: 530` 两行均递增 `authenticationErrorsTotal`，认证错误被重复计数 | 已修复 |
+| BUG-031 | 中 | `cmd/parsers.go` parseVsftpdLog | 日志静默期(无新日志行)时 `vsftp_unique_clients` / `vsftp_active_processes` 不衰减,停留历史非零值 | 已修复 |
+| BUG-032 | 低 | `deploy/alerts.yml.example` HighTransferErrorRate | 传输错误率告警未跨 `type` 标签聚合,单一类型错误率超限但总体超限时可能不告警,与描述"全部类型合计"不符 | 已修复 |
+| BUG-033 | 低 | `cmd/parsers.go` parseVsftpdLog | `summary_exclude` 只过滤 CONNECT 与 OK LOGIN,探测账号的 FAIL LOGIN 与 530/FTP response 错误仍计入统计,凭据错误时污染 `failedLoginsTotal` / `authenticationErrorsTotal` / `ftpErrorsTotal` | 已修复 |
+| BUG-034 | 低 | `deploy/alerts.yml.example` HighBandwidthUsage | 带宽告警使用 KNOWN-002 语义受限的 `vsftp_bandwidth_usage_bytes_per_second` Gauge,按文档建议应改用 PromQL `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m])` | 已修复 |
+| BUG-035 | 低 | `deploy/grafana-dashboard.json` | 仪表盘缺少 `vsftp_bandwidth_usage_bytes_per_second` 与 `vsftp_average_transfer_speed_bytes_per_second` 面板,两个已导出指标无法观测 | 已修复 |
+| BUG-036 | 低 | `deploy/grafana-dashboard.json` 面板22 | 错误速率趋势面板未包含 `vsftp_ftp_errors_total`(FTP 协议错误),错误监控不完整 | 已修复 |
+| BUG-037 | 高 | `deploy/alerts.yml.example` HighBandwidthUsage | PromQL 语法错误:`rate(a + b[5m])` 中 `[5m]` 只能作用于选择器,`+` 连接瞬时向量与区间向量导致规则加载失败 | 已修复 |
+| BUG-038 | 中 | `cmd/parsers.go` parseVsftpdLog | 双日志模式(xferlog + vsftpd.log)下 `state.totalBytesUploaded/Downloaded` 被两处累加,`vsftp_average_transfer_speed_bytes_per_second` 计算为真实值 2 倍(BUG-005 修复声称"不受影响"但不成立) | 已修复 |
+| BUG-039 | 中 | `deploy/alerts.yml.example` 全部 rate 类告警 | `rate()` 单位为次/秒,阈值未乘 60 时与描述"次/分钟"相差 60 倍;如 `rate > 10` 实为 600 次/分钟 | 已修复 |
+| BUG-040 | 中 | `deploy/alerts.yml.example` HighTransferErrorRate / HighFTPErrorRate | `sum(rate(...))` 聚合全部标签导致 `{{ $labels.instance }}` 为空,且多实例部署时跨实例全局聚合,阈值判断错误 | 已修复 |
+| BUG-041 | 低 | `deploy/grafana-dashboard.json` 面板22 | 面板22 D/E 查询 `sum(rate(...))` 与面板104 的 `sum by (reason)` 风格不一致,改用 `sum by (job, instance)` | 已修复 |
+| BUG-042 | 中 | `cmd/parsers.go` parseVsftpdLog | 仅 vsftpd.log 模式(未配置 xferlog)下 `bandwidthUsage` / `averageTransferSpeed` 恒为 0——两者只在 `parseFTPLog` 中更新,但 vsftpd.log-only 时 `parseFTPLog` 不运行 | 已修复 |
+| BUG-043 | 中 | `cmd/parsers.go` parseSSOutput | `ss -tnH` 输出中的 LISTEN 监听套接字本地地址以 FTP 端口结尾被计入 `vsftp_connections`,导致空闲时连接数恒 ≥ 1(IPv4)或 ≥ 2(IPv4+IPv6 双监听),抬高了 HighConnectionCount 告警基线 | 已修复 |
+| BUG-044 | 低 | `cmd/main.go` checkFTPLogin | 第二个 `ftp.Dial`(FTP 握手阶段)超时不计数 `connectionTimeoutsTotal`,FrequentConnectionTimeouts 告警统计不完整 | 已修复 |
+| BUG-045 | 低 | `README.md` | 指标表 `vsftp_transfer_duration_seconds` 桶范围描述为"0.1s~102.4s",实际代码 `ExponentialBuckets(0.1, 2, 10)` 最大桶为 51.2s | 已修复 |
+| BUG-046 | 中 | `cmd/parsers.go` ftpResponseRegex | FTP response 正则未捕获 `[user]` 用户名,NAT 场景下探测 IP 与日志 Client IP 不一致时 `summary_exclude` 无法按用户名过滤探测的错误响应(530 等) | 已修复 |
 
 ## 详细说明
 
@@ -299,7 +315,154 @@
 **修复**：
 1. `authenticationErrorsTotal` 仅由 `530` 响应行递增，`FAIL LOGIN` 分支只保留 `failedLoginsTotal`（登录尝试次数）。
 2. FTP 响应解析泛化为任意 `4xx/5xx`，新增 `vsftp_ftp_errors_total{reason}` 按原因分类计数，`reason` 取值：`auth_failed` / `max_connections` / `service_unavailable` / `data_connection_error` / `command_error` / `dir_not_found` / `file_not_found` / `permission_denied` / `quota_exceeded` / `file_name_not_allowed` / `other`。
-3. `max_connections` 分类覆盖原 `530 ... maximum number of clients` 及 `421 ... too many connections` 变体。
+
+
+### BUG-031:活跃度指标在日志静默期不衰减(中)
+
+**位置**:`cmd/parsers.go` parseVsftpdLog
+
+**问题**:`vsftp_unique_clients` 和 `vsftp_active_processes` 的更新逻辑在 `parseVsftpdLog` 的 `for` 循环内部,位于 `len(lines)==0` 提前 break 之后。当 vsftpd 日志无新行时(静默期),这两个指标不会被刷新,5 分钟超时清理逻辑不执行,客户端/进程数停留在历史非零值,即使所有客户端已断开。
+
+**修复**:将 `updateUniqueClientsMetric` 与 `updateActiveProcessesMetric` 的调用移到 `len(lines)==0` break 之前,确保每轮 `parseVsftpdLog` 调用(无论是否有新日志行)都会按时执行清理。1 分钟节流逻辑保持不变。
+
+### BUG-032:传输错误率告警未跨类型聚合(低)
+
+**位置**:`deploy/alerts.yml.example` HighTransferErrorRate
+
+**问题**:`vsftp_transfer_errors_total` 带有 `type` 标签(取值 `upload` / `download`)。原告警表达式 `rate(vsftp_transfer_errors_total[5m]) > 5` 是向量表达式,要求每个 `type` 标签值单独满足阈值,而非所有类型合计。当上传错误率 3 次/分钟、下载错误率 3 次/分钟时,合计 6 次/分钟超限但不告警,与描述"传输错误率超过 5 次/分钟"不符。
+
+**修复**:改为 `sum(rate(vsftp_transfer_errors_total[5m])) > 5`,按全部类型合计判断。
+
+### BUG-033:summary_exclude 未过滤探测失败事件(低)
+
+**位置**:`cmd/parsers.go` parseVsftpdLog
+
+**问题**:`summary_exclude=true` 时,CONNECT 按 `clientIP == probeClientIP` 过滤,OK LOGIN 按 `username == config.FTPUser` 过滤。但以下分支未做过滤:
+1. FAIL LOGIN 事件:探测账号凭据错误时 vsftpd 记录 `FAIL LOGIN` 行,计入 `failedLoginsTotal`,但探测失败本质是 exporter 自身行为,不应污染登录失败统计。
+2. FTP 响应 4xx/5xx 事件:探测失败产生的 `530 Login incorrect` 响应计入 `authenticationErrorsTotal` 与 `ftpErrorsTotal`,同样污染认证错误统计。
+
+**修复**:
+1. FAIL LOGIN 分支:在解析 `username` 与 `clientIP` 后,增加 `summary_exclude` 过滤条件 `clientIP == state.probeClientIP || username == config.FTPUser`。
+2. FTP 响应分支:在递增错误计数前,增加 `summary_exclude` 过滤条件 `clientIP == state.probeClientIP`(响应行中 `matches[3]` 为客户端 IP)。
+
+### BUG-034:带宽告警基于语义受限的 Gauge(低)
+
+**位置**:`deploy/alerts.yml.example` HighBandwidthUsage
+
+**问题**:`vsftp_bandwidth_usage_bytes_per_second` 的计算基于日志事件时间戳区间,单事件轮次(时间跨度=0)不更新,且 vsftpd.log-only 模式下恒为 0。KNOWN-002 已明确建议以 PromQL `rate()` 为主。原告警基于该有缺陷的 Gauge,可能漏报或误报。
+
+**修复**:将告警表达式改为 `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m]) > 104857600`(即 100 MB/s),基于原始计数器,语义明确且无单事件缺陷。
+
+### BUG-035:仪表盘缺少已导出指标的观测面板(低)
+
+**位置**:`deploy/grafana-dashboard.json`
+
+**问题**:exporter 导出 `vsftp_bandwidth_usage_bytes_per_second`(Gauge) 和 `vsftp_average_transfer_speed_bytes_per_second`(Gauge) 两个指标,但仪表盘没有任何面板展示这两个指标。`HighBandwidthUsage` 告警依赖前者,但无法在仪表盘上观测其历史趋势。
+
+**修复**:在"传输统计"行之后新增"⚡ 带宽与速度指标"行,包含:
+- 实时带宽面板 (`vsftp_bandwidth_usage_bytes_per_second`,timeseries,提示 KNOWN-002 语义限制)
+- 平均传输速度面板 (`vsftp_average_transfer_speed_bytes_per_second`,stat,提示 KNOWN-003 语义)
+
+### BUG-036:错误速率趋势面板未包含 FTP 协议错误(低)
+
+**位置**:`deploy/grafana-dashboard.json` 面板22
+
+**问题**:面板22"错误速率趋势"展示了登录失败、认证错误、连接超时、传输错误四种速率,但未包含 `vsftp_ftp_errors_total`(FTP 协议错误,按原因分类)。BUG-030 新增的 FTP 协议错误监控不完整。
+
+**修复**:在面板22的 targets 中新增第5条查询 `sum(rate(vsftp_ftp_errors_total{job="$job", instance="$instance"}[5m])) * 60`,legendFormat 为"FTP 协议错误"。
+
+### BUG-037:带宽告警 PromQL 语法错误(高)
+
+**位置**:`deploy/alerts.yml.example` HighBandwidthUsage
+
+**问题**:第四轮修复 BUG-034 时,将告警表达式写成 `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m]) > 104857600`。PromQL 语法规定 `[5m]` 区间选择器只能作用于指标选择器,不能作用于算术表达式:`rate(a + b[5m])` 中 `b[5m]` 是区间向量,与瞬时向量 `a` 相加类型不匹配,Prometheus 规则加载时会报错,导致整组告警规则无法生效。
+
+**修复**:改为 `rate(vsftp_upload_bytes_total[5m]) + rate(vsftp_download_bytes_total[5m]) > 104857600`,分别对两个计数器取 rate 再相加。
+
+### BUG-038:双日志模式下平均速度字节双重累加(中)
+
+**位置**:`cmd/parsers.go` parseVsftpdLog OK UPLOAD / OK DOWNLOAD
+
+**问题**:`state.totalBytesUploaded` 与 `state.totalBytesDownloaded` 用于计算 `vsftp_average_transfer_speed_bytes_per_second`(总字节/总运行时长)。当 xferlog 与 vsftpd.log 同时启用时(默认配置 `configs/config.json` 即如此),同一传输事件在 `parseFTPLog`(第406/412行)和 `parseVsftpdLog`(第644/660行)各累加一次,平均速度指标虚高为真实值 2 倍。BUG-005 修复时声称"state.totalBytesUploaded/Downloaded 与平均速度计算不受影响",实际不成立。
+
+**修复**:在 `parseVsftpdLog` 的 OK UPLOAD/OK DOWNLOAD 分支中,将 `state.totalBytes*` 累加移入 `if config.LogFilePath == ""` 守卫内,与传输计数指标(BUG-005 修复)保持一致:xferlog 启用时由 xferlog 累计,否则由 vsftpd.log 累计。
+
+### BUG-039:rate 类告警阈值单位错误(中)
+
+**位置**:`deploy/alerts.yml.example` 全部 rate 类告警
+
+**问题**:PromQL `rate()` 返回**每秒**事件数,但告警描述均写"次/分钟"。原表达式如 `rate(vsftp_failed_logins_total[5m]) > 10` 实际阈值是 10 次/秒 = 600 次/分钟,与描述"超过 10 次/分钟"相差 60 倍,导致阈值形同虚设(正常流量即可触发)或描述误导。
+
+**修复**:所有 rate 类告警表达式乘以 60(`rate(...[5m]) * 60 > N`),使阈值单位与描述一致(次/分钟)。涉及:HighFailedLoginRate、HighTransferErrorRate、FrequentConnectionTimeouts、FrequentAuthenticationErrors、RapidReconnections、MaxConnectionsReached、HighFTPErrorRate。
+
+### BUG-040:sum 聚合丢失 instance 标签(中)
+
+**位置**:`deploy/alerts.yml.example` HighTransferErrorRate / HighFTPErrorRate
+
+**问题`:第四轮新增/修改的 `sum(rate(...))` 聚合了**全部**标签(包括 `instance`、`job`),导致:1) 描述模板 `{{ $labels.instance }}` 为空;2) 多实例部署时跨实例全局求和,任一实例超限会以聚合值判断,且告警丢失实例归属信息。
+
+**修复**:改为 `sum by (job, instance) (rate(...[5m]) * 60)`,按实例保留标签后再判断阈值。
+
+### BUG-041:仪表盘面板22 sum 风格不一致(低)
+
+**位置**:`deploy/grafana-dashboard.json` 面板22
+
+**问题**:面板22 的 D/E 查询使用 `sum(rate(...))` 而面板104 使用 `sum by (reason)`。虽然面板查询中已用 `job`/`instance` 选择器过滤,`sum` 只聚合 `type`/`reason` 标签,但为与告警规则风格一致、避免聚合到空标签,改为 `sum by (job, instance)`。
+
+**修复**:面板22 D/E 查询改为 `sum by (job, instance) (rate(...[5m])) * 60`。
+
+### BUG-042:vsftpd.log-only 模式带宽与平均速度恒为 0(中)
+
+**位置**:`cmd/parsers.go` parseVsftpdLog
+
+**问题**:`bandwidthUsage`(`vsftp_bandwidth_usage_bytes_per_second`)与 `averageTransferSpeed`(`vsftp_average_transfer_speed_bytes_per_second`)只在 `parseFTPLog`(xferlog 解析)中更新。当部署只启用 vsftpd.log(未配置 `Xferlog_file_path`)时,`parseFTPLog` 不运行,而 `parseVsftpdLog` 虽然累加了 `state.totalBytesUploaded/Downloaded`,却从未更新这两个 Gauge,导致:
+- `vsftp_bandwidth_usage_bytes_per_second` 恒为 0(仪表盘"实时带宽"面板与 `HighBandwidthUsage` 告警失效)
+- `vsftp_average_transfer_speed_bytes_per_second` 恒为 0(仪表盘"平均传输速度"面板失效)
+
+**修复**:在 `parseVsftpdLog` 的 OK UPLOAD/OK DOWNLOAD 分支解析事件时间戳(`matches[1]`),跟踪本轮传输事件的最早/最晚时间与总字节;在函数末尾(`config.LogFilePath == ""` 时)复用与 `parseFTPLog` 相同的带宽与平均速度计算逻辑,更新两个 Gauge。双日志模式不受影响(xferlog 仍是权威来源)。
+
+### BUG-043:监听套接字被计入连接数指标(中)
+
+**位置**:`cmd/parsers.go` parseSSOutput
+
+**问题**:`parseSSOutput` 通过本地/对端地址是否以 `:<FTP端口>` 结尾判断连接是否相关。但 `ss -tnH` 输出中的 **LISTEN 监听套接字**行(如 `LISTEN 0 128 0.0.0.0:6069 0.0.0.0:*`)的本地地址同样以 FTP 端口结尾,被计入 `vsftp_connections`。后果:
+- 没有任何活跃连接时,`vsftp_connections` 恒 ≥ 1(仅 IPv4 监听)或 ≥ 2(IPv4+IPv6 双监听)
+- `HighConnectionCount` 告警基线被抬高,空闲态连接数显示错误
+
+**修复**:在 `parseSSOutput` 中跳过 `state == "LISTEN"` 的行。ESTAB/CLOSE-WAIT/TIME-WAIT 等真实连接状态不受影响。
+
+### BUG-044:FTP 握手阶段超时未计数(低)
+
+**位置**:`cmd/main.go` checkFTPLogin
+
+**问题**:`checkFTPLogin` 有两个拨号阶段:
+1. `net.Dialer.Dial`(TCP 连接)——超时已计入 `connectionTimeoutsTotal` ✓
+2. `ftp.Dial`(FTP banner/握手)——超时只返回错误,**未计数** `connectionTimeoutsTotal`
+
+场景:服务器接受 TCP 连接但不响应 FTP banner 时,握手超时不会触发 `FrequentConnectionTimeouts` 告警(该告警只统计阶段 1 的超时)。
+
+**修复**:在 `ftp.Dial` 失败分支同样通过 `errors.As(err, &net.Error)` 检查 `Timeout()` 并计数 `connectionTimeoutsTotal`。
+
+### BUG-045:README 桶范围描述错误(低)
+
+**位置**:`README.md`
+
+**问题**:指标表 `vsftp_transfer_duration_seconds` 描述为"桶: 0.1s~102.4s 指数分布",但实际代码 `prometheus.ExponentialBuckets(0.1, 2, 10)` 生成 10 个桶,最大桶为 **51.2s**(0.1×2⁹)。
+
+**修复**:将 README 中的 "102.4s" 改为 "51.2s"。
+
+### BUG-046:FTP response 正则未捕获用户名,summary_exclude 不完整(中)
+
+**位置**:`cmd/parsers.go` ftpResponseRegex、FTP response 分支
+
+**问题**:`ftpResponseRegex` 使用 `.*` 跳过 `[pid]` 与 `FTP response` 之间的 `[user]` 部分,未捕获用户名。FTP response 分支的 `summary_exclude` 仅按探测来源 IP 过滤。在 NAT/网关场景下,导出器探测连接的本地出口 IP 与 vsftpd.log 中记录的 Client IP(经 NAT 转换后)可能不一致,导致探测产生的错误响应(如 `530 Login incorrect`)无法被过滤,污染 `vsftp_ftp_errors_total` 和 `vsftp_authentication_errors_total`。
+
+**修复**:
+1. 修改 `ftpResponseRegex` 为 `\[pid\s+(\d+)\]\s+\[([^\]]*)\]\s+FTP\s+response:` 以捕获 `[user]`(分组 3)。
+2. 更新分组索引:原分组 3(clientIP)→4,原分组 4(code+message)→5。
+3. FTP response 过滤条件新增 `matches[3] == config.FTPUser`(用户名匹配),与 FAIL LOGIN 分支保持一致。
+4. 同步更新 `TestFTPResponseRegex` 的测试用例(增加 username 字段与新断言)。
+5. 新增 `TestFTPResponseSummaryExcludeByUsername` 回归测试,验证 NAT 场景下 ostore 的 530 按用户名过滤。
 
 ## 已知特性说明
 
@@ -308,3 +471,6 @@
 | KNOWN-002 | `vsftp_bandwidth_usage_bytes_per_second` 语义有限：单事件轮次（时间跨度=0）不更新；事件时间跨度大（日志空档）时会算出一个偏小的"平均带宽"。建议以 PromQL `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m])` 为主。 |
 | KNOWN-003 | `vsftp_average_transfer_speed_bytes_per_second` 的除数是程序总运行时长（`state.lastProcessedTime` 仅在启动时初始化、不再更新），即"总字节/总运行时长"；字段名 `lastProcessedTime` 有误导性。 |
 | KNOWN-004 | 登录探测的成功事件仍会计入日志派生态指标（`vsftp_user_logins_total`、`vsftp_ftp_login_total`、`vsftp_user_connections_total`、`vsftp_client_connections_total` 等）。需使用专用探测账号或在部署侧排除 exporter 自身 IP 才能完全消除（承接 BUG-001 遗留建议）。 |
+| KNOWN-005 | `state.probeClientIP` 仅在探测成功时更新;探测失败(如 FTP 端口不可达)时保留上一次成功值。因 exporter 自身 IP 一般稳定,影响有限;若 exporter 网络出口 IP 变化,`summary_exclude` 可能无法过滤新的探测来源 IP。 |
+| KNOWN-006 | CONNECT 事件无用户名信息,仅含来源 IP。NAT/网关场景下,探测连接的来源 IP 经转换后与 `state.probeClientIP`(探测本地出口 IP)不一致,`summary_exclude` 无法按 IP 过滤 CONNECT 事件,导致 `vsftp_client_connections_total` 被探测污染(每次探测 +1)。这是日志信息不足导致的固有限制,非代码缺陷;需部署侧排除 exporter 自身 IP 才能完全消除。 |
+| KNOWN-007 | `vsftp_user_connections_total` 与 `vsftp_user_logins_total` 在 OK LOGIN 分支同步递增(BUG-006 修复后遗留),两者永远相等,无独立统计意义。仪表盘仅使用 `vsftp_user_logins_total`。保留该指标仅为向后兼容。 |

@@ -24,7 +24,7 @@ var (
 	loginFailRegex   = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]*)\]\s+FAIL\s+LOGIN:\s+Client\s+"([^"]+)"`)
 	uploadOKRegex    = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+UPLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
 	downloadOKRegex  = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]+)\]\s+OK\s+DOWNLOAD:\s+Client\s+"([^"]+)",\s+"([^"]+)",\s+(\d+)\s+bytes`)
-	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\].*FTP\s+response:\s+Client\s+"([^"]*)",\s+"([^"]*)"`)
+	ftpResponseRegex = regexp.MustCompile(`^(\w+\s+\w+\s+\d{1,2}\s+\d+:\d+:\d+\s+\d+)\s+\[pid\s+(\d+)\]\s+\[([^\]]*)\]\s+FTP\s+response:\s+Client\s+"([^"]*)",\s+"([^"]*)"`)
 )
 
 type ExporterState struct {
@@ -512,6 +512,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 	totalLoginsOK := 0
 	totalLoginsFail := 0
 
+	// 仅 vsftpd.log 模式(未配置 xferlog)下,由本函数负责带宽与平均速度指标(BUG-042):
+	// parseFTPLog 未运行时,bandwidthUsage / averageTransferSpeed 无人更新,恒为 0。
+	transferBytesThisRound := int64(0)
+	var transferEarliest, transferLatest time.Time
+
 	for {
 		lines, newPosition, newInode, err := readRemoteFile(sshMgr, logPath, state.vsftpLogPosition, state.vsftpLogInode)
 		if err != nil {
@@ -521,6 +526,19 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		state.vsftpLogPosition = newPosition
 		state.vsftpLogInode = newInode
 
+		// 无论本轮是否有新日志行,都按时刷新客户端/进程活跃度指标:
+		// 旧实现在 len(lines)==0 提前 break 后才更新,导致日志静默期
+		// vsftp_unique_clients / vsftp_active_processes 永不衰减,停留历史非零值(BUG-031)。
+		currentTime := time.Now()
+		if currentTime.Sub(state.lastUniqueClientUpdate).Minutes() >= 1 {
+			updateUniqueClientsMetric(state, currentTime)
+			state.lastUniqueClientUpdate = currentTime
+		}
+		if currentTime.Sub(state.lastProcessUpdate).Minutes() >= 1 {
+			updateActiveProcessesMetric(state, currentTime)
+			state.lastProcessUpdate = currentTime
+		}
+
 		if len(lines) == 0 {
 			break
 		}
@@ -529,7 +547,6 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 		connectCount := 0
 		loginOKCount := 0
 		loginFailCount := 0
-		currentTime := time.Now()
 
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
@@ -609,7 +626,13 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				if err != nil {
 					continue
 				}
+				username := matches[3]
 				clientIP := matches[4]
+
+				// summary_exclude 开启时,忽略健康检查探测账号的失败登录
+				if config.SummaryExclude && (state.probeClientIP != "" && clientIP == state.probeClientIP || username == config.FTPUser) {
+					continue
+				}
 
 				// 认证错误次数由下方 FTP response 530 行统计，避免同一事件重复计数
 				failedLoginsTotal.Inc()
@@ -623,8 +646,19 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
 				clientIP := matches[4]
 				if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-					state.totalBytesUploaded += bytes
+					// 记录传输事件时间范围与字节,供带宽/平均速度计算(BUG-042)
+					if eventTime, err := parseVsftpdTimestamp(matches[1]); err == nil {
+						if transferEarliest.IsZero() || eventTime.Before(transferEarliest) {
+							transferEarliest = eventTime
+						}
+						if transferLatest.IsZero() || eventTime.After(transferLatest) {
+							transferLatest = eventTime
+						}
+					}
+					transferBytesThisRound += bytes
+					// xferlog 已启用时,传输字节由 parseFTPLog 累计,此处仅累计统计字节避免双计(BUG-038)
 					if config.LogFilePath == "" {
+						state.totalBytesUploaded += bytes
 						ftpUploadTotal.Inc()
 						uploadBytesTotal.Add(float64(bytes))
 						if clientIP != "" {
@@ -639,8 +673,19 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
 				clientIP := matches[4]
 				if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
-					state.totalBytesDownloaded += bytes
+					// 记录传输事件时间范围与字节,供带宽/平均速度计算(BUG-042)
+					if eventTime, err := parseVsftpdTimestamp(matches[1]); err == nil {
+						if transferEarliest.IsZero() || eventTime.Before(transferEarliest) {
+							transferEarliest = eventTime
+						}
+						if transferLatest.IsZero() || eventTime.After(transferLatest) {
+							transferLatest = eventTime
+						}
+					}
+					transferBytesThisRound += bytes
+					// xferlog 已启用时,传输字节由 parseFTPLog 累计,此处仅累计统计字节避免双计(BUG-038)
 					if config.LogFilePath == "" {
+						state.totalBytesDownloaded += bytes
 						ftpDownloadTotal.Inc()
 						downloadBytesTotal.Add(float64(bytes))
 						if clientIP != "" {
@@ -653,13 +698,19 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 
 			// FTP 协议错误响应（4xx / 5xx）
 			if matches := ftpResponseRegex.FindStringSubmatch(line); matches != nil {
-				parts := strings.SplitN(matches[4], " ", 2)
+				parts := strings.SplitN(matches[5], " ", 2)
 				code := parts[0]
 				message := ""
 				if len(parts) > 1 {
 					message = parts[1]
 				}
 				if !strings.HasPrefix(code, "4") && !strings.HasPrefix(code, "5") {
+					continue
+				}
+
+				// summary_exclude 开启时,忽略健康检查探测产生的错误响应:
+				// 按探测来源 IP 或探测账号名过滤(BUG-046,NAT 场景下 IP 可能不一致)
+				if config.SummaryExclude && (state.probeClientIP != "" && matches[4] == state.probeClientIP || matches[3] == config.FTPUser) {
 					continue
 				}
 
@@ -675,16 +726,6 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			}
 		}
 
-		if currentTime.Sub(state.lastUniqueClientUpdate).Minutes() >= 1 {
-			updateUniqueClientsMetric(state, currentTime)
-			state.lastUniqueClientUpdate = currentTime
-		}
-
-		if currentTime.Sub(state.lastProcessUpdate).Minutes() >= 1 {
-			updateActiveProcessesMetric(state, currentTime)
-			state.lastProcessUpdate = currentTime
-		}
-
 		totalLinesProcessed += linesProcessed
 		totalConnects += connectCount
 		totalLoginsOK += loginOKCount
@@ -692,6 +733,24 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 
 		if len(lines) < maxLinesPerRead {
 			break
+		}
+	}
+
+	// 仅 vsftpd.log 模式(未配置 xferlog)下,由本函数负责带宽与平均速度指标(BUG-042)
+	if config.LogFilePath == "" {
+		if !transferEarliest.IsZero() && !transferLatest.IsZero() {
+			logTimeDiff := transferLatest.Sub(transferEarliest).Seconds()
+			if logTimeDiff > 0 {
+				bandwidthUsage.Set(float64(transferBytesThisRound) / logTimeDiff)
+			}
+		} else if transferBytesThisRound == 0 {
+			bandwidthUsage.Set(0)
+		}
+
+		totalBytes := state.totalBytesUploaded + state.totalBytesDownloaded
+		programRunTime := time.Since(state.lastProcessedTime).Seconds()
+		if totalBytes > 0 && programRunTime > 0 {
+			averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 		}
 	}
 
@@ -811,6 +870,10 @@ func parseSSOutput(output string, ftpPort string) (total, established, closeWait
 			continue
 		}
 		state := fields[0]
+		// LISTEN 是监听套接字,不是连接,不应计入 vsftp_connections(BUG-043)
+		if state == "LISTEN" {
+			continue
+		}
 		localAddr := fields[3]
 		peerAddr := fields[4]
 		if !strings.HasSuffix(localAddr, portSuffix) && !strings.HasSuffix(peerAddr, portSuffix) {
