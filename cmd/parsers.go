@@ -262,6 +262,12 @@ func parseStandardXferlog(line string) (eventTime time.Time, direction string, c
 		transferTime = t
 	}
 	if size, err := strconv.ParseInt(fileSizeStr, 10, 64); err == nil {
+		// clamp: 畸形日志可能出现负 fileSize(如损坏/非标准产出)。负值会被
+		// prometheus counter.Add 当"计数减少"而 panic,进而崩溃整个监控协程
+		// (prometheus client_golang v1.19 在 v<0 时 panic)。归零以保单调性(BUG-054)。
+		if size < 0 {
+			size = 0
+		}
 		fileSize = size
 	}
 	completed = (completionStatus == "c")
@@ -655,6 +661,10 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 							transferLatest = eventTime
 						}
 					}
+					// 形态异常的日志可能有负字节,clamp 防 counter 单调性 panic(BUG-054)
+					if bytes < 0 {
+						bytes = 0
+					}
 					transferBytesThisRound += bytes
 					// xferlog 已启用时,传输字节由 parseFTPLog 累计,此处仅累计统计字节避免双计(BUG-038)
 					if config.LogFilePath == "" {
@@ -681,6 +691,10 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 						if transferLatest.IsZero() || eventTime.After(transferLatest) {
 							transferLatest = eventTime
 						}
+					}
+					// 形态异常的日志可能有负字节,clamp 防 counter 单调性 panic(BUG-054)
+					if bytes < 0 {
+						bytes = 0
 					}
 					transferBytesThisRound += bytes
 					// xferlog 已启用时,传输字节由 parseFTPLog 累计,此处仅累计统计字节避免双计(BUG-038)
@@ -858,7 +872,6 @@ func checkConnections(config *Config, sshMgr *SSHManager) error {
 // host (peer = FTP port). Each TCP connection is deduplicated by its (local, peer)
 // address pair so that a single connection observed from both sockets is counted once.
 func parseSSOutput(output string, ftpPort string) (total, established, closeWait int) {
-	portSuffix := ":" + ftpPort
 	seen := make(map[string]struct{})
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -876,7 +889,9 @@ func parseSSOutput(output string, ftpPort string) (total, established, closeWait
 		}
 		localAddr := fields[3]
 		peerAddr := fields[4]
-		if !strings.HasSuffix(localAddr, portSuffix) && !strings.HasSuffix(peerAddr, portSuffix) {
+		// 精确比较端口而非字符串后缀匹配:后缀匹配会把 :56069、:16069 等
+		// 恰好以 FTP 端口结尾的随机客户端端口误当成 FTP 连接(BUG-053)。
+		if parseSSPort(localAddr) != ftpPort && parseSSPort(peerAddr) != ftpPort {
 			continue
 		}
 		key := ssConnKey(ssNormalizeAddr(localAddr), ssNormalizeAddr(peerAddr))
@@ -893,6 +908,17 @@ func parseSSOutput(output string, ftpPort string) (total, established, closeWait
 		}
 	}
 	return
+}
+
+// parseSSPort 从 ss 输出的地址中提取端口号(最后一个冒号之后的部分)。
+// ss 输出可能为 IPv4("1.2.3.4:6069")、带方括号的 IPv6("[::1]:6069")或
+// IPv4-mapped IPv6("::ffff:1.2.3.4:6069")。用 LastIndex 提取最末端口段,
+// 保证与 ftpPort 做精确比较(BUG-053)。
+func parseSSPort(addr string) string {
+	if i := strings.LastIndex(addr, ":"); i != -1 {
+		return addr[i+1:]
+	}
+	return ""
 }
 
 // ssNormalizeAddr normalizes an address so IPv4-mapped IPv6 endpoints

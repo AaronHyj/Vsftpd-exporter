@@ -122,7 +122,7 @@ var (
 	connectionLoginDelaySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "vsftp_connection_login_delay_seconds",
 		Help:    "Time delay between connection and successful login in seconds.",
-		Buckets: prometheus.ExponentialBuckets(0.001, 2, 15),
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 17),
 	})
 
 	rapidReconnectionsTotal = prometheus.NewCounter(prometheus.CounterOpts{

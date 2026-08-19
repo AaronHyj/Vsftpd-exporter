@@ -11,7 +11,7 @@ groups:
           service: vsftpd
         annotations:
           summary: "Vsftpd 服务不可用"
-          description: "实例 {{ $labels.instance }} 的 Vsftpd 服务已经宕机超过 2 分钟"
+          description: "实例 {{ $labels.instance }} 的 FTP 探活失败超过 2 分钟(可能是服务宕机,也可能含探测账号认证失败,建议核对 vsftp_login_success 与日志)"
 
       # 登录失败率过高告警
       - alert: HighFailedLoginRate
@@ -92,14 +92,14 @@ groups:
 
       # 带宽使用率过高告警(基于计数器 rate,避免单事件轮次语义缺陷,见 bugrecord KNOWN-002)
       - alert: HighBandwidthUsage
-        expr: rate(vsftp_upload_bytes_total[5m]) + rate(vsftp_download_bytes_total[5m]) > 104857600  # 100 MB/s
+        expr: rate(vsftp_upload_bytes_total[5m]) + rate(vsftp_download_bytes_total[5m]) > 104857600  # 100 MiB/s (104857600 B/s)
         for: 5m
         labels:
           severity: info
           service: vsftpd
         annotations:
           summary: "带宽使用率过高"
-          description: "实例 {{ $labels.instance }} 的传输带宽为 {{ $value | humanize }}B/s,超过 100 MB/s"
+          description: "实例 {{ $labels.instance }} 的传输带宽为 {{ $value | humanize }}B/s,超过 100 MiB/s (104857600 B/s)"
 
       # FTP 协议错误率过高告警
       - alert: HighFTPErrorRate
@@ -121,7 +121,7 @@ groups:
           service: vsftpd
         annotations:
           summary: "达到最大连接数限制"
-          description: "实例 {{ $labels.instance }} 在过去 5 分钟内多次达到最大连接数限制"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内出现过达到最大连接数限制的事件"
 
       # Exporter 自身不可用告警
       - alert: VsftpExporterDown

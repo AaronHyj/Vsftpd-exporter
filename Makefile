@@ -1,4 +1,4 @@
-.PHONY: build run test clean fmt vet install help
+.PHONY: all build run test clean fmt vet tidy coverage install help build-linux build-windows build-darwin build-all
 
 # 变量定义
 BINARY_NAME=vsftp-exporter

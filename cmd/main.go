@@ -72,7 +72,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func checkFTPLogin(config *Config) (probeIP string, err error) {
-	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", config.TargetHost+":"+config.FTPPort)
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", net.JoinHostPort(config.TargetHost, config.FTPPort))
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -84,7 +84,13 @@ func checkFTPLogin(config *Config) (probeIP string, err error) {
 		probeIP = tcpAddr.IP.String()
 	}
 
-	ftpConn, err := ftp.Dial(config.TargetHost+":"+config.FTPPort, ftp.DialWithNetConn(conn), ftp.DialWithTimeout(10*time.Second))
+	// FTP handshake (the 220 banner read inside Dial) and login reads have no
+	// built-in deadline: once DialWithNetConn is used, the library skips its own
+	// context timeout, so DialWithTimeout only covers the TCP connect stage.
+	// Set an explicit deadline so the monitor goroutine cannot block forever if
+	// the server accepts TCP but never replies (BUG-049).
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	ftpConn, err := ftp.Dial(net.JoinHostPort(config.TargetHost, config.FTPPort), ftp.DialWithNetConn(conn), ftp.DialWithTimeout(10*time.Second))
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -94,6 +100,7 @@ func checkFTPLogin(config *Config) (probeIP string, err error) {
 		return probeIP, fmt.Errorf("初始化FTP连接失败: %w", err)
 	}
 	defer ftpConn.Quit()
+	defer conn.SetDeadline(time.Time{}) // clear so defer ftpConn.Quit() can send QUIT
 
 	if err := ftpConn.Login(config.FTPUser, config.FTPPassword); err != nil {
 		var protoErr *textproto.Error
@@ -104,6 +111,18 @@ func checkFTPLogin(config *Config) (probeIP string, err error) {
 	}
 
 	return probeIP, nil
+}
+
+// safeRunChecks 包装 runChecks:任何 panic 都被捕获并记录日志,避免单个异常
+// (如畸形日志行触发 prometheus counter panic,见 BUG-054)导致整个监控协程
+// 崩溃、指标静默停滞而 exporter 表面仍存活(HTTP /metrics 依旧响应旧值)。
+func safeRunChecks(config *Config, state *ExporterState, sshMgr *SSHManager) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("运行检查时发生panic,已恢复", "panic", r)
+		}
+	}()
+	runChecks(config, state, sshMgr)
 }
 
 func runChecks(config *Config, state *ExporterState, sshMgr *SSHManager) {
@@ -181,7 +200,7 @@ func main() {
 
 	slog.Info("启动监控协程", "interval_seconds", config.CheckInterval)
 	go func() {
-		runChecks(config, state, sshMgr)
+		safeRunChecks(config, state, sshMgr)
 
 		ticker := time.NewTicker(time.Duration(config.CheckInterval) * time.Second)
 		defer ticker.Stop()
@@ -192,7 +211,7 @@ func main() {
 				slog.Info("监控协程收到停止信号")
 				return
 			case <-ticker.C:
-				runChecks(config, state, sshMgr)
+				safeRunChecks(config, state, sshMgr)
 			}
 		}
 	}()

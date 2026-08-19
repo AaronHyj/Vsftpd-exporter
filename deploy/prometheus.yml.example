@@ -19,7 +19,7 @@ scrape_configs:
   # Vsftpd Exporter 监控
   - job_name: 'vsftp-exporter'
     static_configs:
-      - targets: ['vsftp-exporter:9101']
+      - targets: ['localhost:9101']
         labels:
           service: 'vsftpd'
           environment: 'production'

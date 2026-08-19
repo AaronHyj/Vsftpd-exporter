@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -78,7 +79,7 @@ func createSSHClient(config *Config) (*ssh.Client, error) {
 		Timeout:         10 * time.Second,
 	}
 
-	address := config.TargetHost + ":" + config.SSHPort
+	address := net.JoinHostPort(config.TargetHost, config.SSHPort)
 	client, err := ssh.Dial("tcp", address, sshConfig)
 	if err != nil {
 		return nil, fmt.Errorf("SSH连接失败: %w", err)

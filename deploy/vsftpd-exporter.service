@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=prometheus
-ExecStart=/usr/local/vsftp-exporter/vsftp-exporter -config=/usr/local/vsftp-exporter/configs/config.json -log-level=info
+ExecStart=/usr/local/bin/vsftp-exporter -config=/etc/vsftp-exporter/config.json -log-level=info
 Restart=always
 RestartSec=5
 

@@ -173,7 +173,7 @@ cp configs/config.example.json configs/config.json
 | `ssh_port` | string | No | `22` | SSH port |
 | `ssh_user` | string | No | - | SSH username (required when `need_ssh=true`) |
 | `ssh_password` | string | No | - | SSH password (required when `need_ssh=true`) |
-| `Xferlog_file_path` | string | No | - | Path to the xferlog transfer log; supports environment variables and relative paths |
+| `Xferlog_file_path` | string | No | `-` | xferlog path; supports relative paths and env vars (expanded only in local `need_ssh=false` mode; SSH mode does not expand and the path must not contain `$`, quotes, or whitespace). Prefer `${VAR}` form to avoid greedy matching; `os.ExpandEnv` expands once (a literal `$$` becomes empty) |
 | `listen_port` | string | No | `9101` | Exporter HTTP listen port |
 | `check_interval` | int | No | `30` | Collection interval (1-3600 seconds) |
 | `vsftplog_enabled` | bool | No | `false` | Enable vsftpd.log verbose log parsing |
@@ -247,7 +247,7 @@ To monitor vsftpd on a remote server:
 ```
 
 In SSH mode the exporter runs `ss -tnH` to collect connection states, uses `tail -c +N` / `cat` for incremental log reads, and `stat` for log rotation detection. The SSH user needs read access to the log files and permission to run `ss`.
-
+> **Security notes**>> - **SSH host key is NOT verified (MITM risk)**: the exporter uses `ssh.InsecureIgnoreHostKey()` (see `cmd/ssh.go`), so the SSH server's host key is not validated. Use only within a trusted network and restrict the listener port and access sources.> - **Plaintext credentials**: `configs/config.json` stores SSH/FTP passwords in cleartext. Restrict access via file permissions (`chmod 600`) and never commit the config file to version control (`configs/config.json` is already excluded by `.gitignore`).> - **Listener port**: the default `listen_port` `9101` should not be exposed to the public internet; restrict it with a firewall / reverse proxy.
 ### systemd Service
 
 Create `/etc/systemd/system/vsftp-exporter.service`:
@@ -288,22 +288,20 @@ sudo systemctl enable --now vsftp-exporter
 
 | Metric | Type | Description |
 | -------- | ---- | ---- |
-| `vsftp_login_total` | Counter | Total number of FTP logins |
 | `vsftp_upload_total` | Counter | Total number of upload operations |
 | `vsftp_download_total` | Counter | Total number of download operations |
 | `vsftp_upload_bytes_total` | Counter | Total bytes uploaded |
 | `vsftp_download_bytes_total` | Counter | Total bytes downloaded |
-| `vsftp_transfer_duration_seconds` | Histogram | Transfer duration distribution (buckets: 0.1s~102.4s exponential) |
+| `vsftp_transfer_duration_seconds` | Histogram | Transfer duration distribution (buckets: 0.1s~51.2s exponential) |
 | `vsftp_average_transfer_speed_bytes_per_second` | Gauge | Average transfer speed (bytes/s) |
 | `vsftp_bandwidth_usage_bytes_per_second` | Gauge | Current bandwidth usage (bytes/s) |
-| `vsftp_last_login_time` | Gauge | Unix timestamp of the last successful login |
 
 ### Error Metrics
 
 | Metric | Type | Labels | Description |
 | -------- | ---- | ---- | ---- |
 | `vsftp_failed_logins_total` | Counter | - | Total failed login attempts (by FAIL LOGIN events) |
-| `vsftp_transfer_errors_total` | Counter | `type` | Total transfer errors (upload/download/timeout) |
+| `vsftp_transfer_errors_total` | Counter | `type` | Total transfer errors (upload/download) |
 | `vsftp_connection_timeouts_total` | Counter | - | Total connection timeouts |
 | `vsftp_authentication_errors_total` | Counter | - | Total authentication errors (530 responses only; FAIL LOGIN is no longer double-counted) |
 | `vsftp_max_connections_reached_total` | Counter | - | Times the max-connections limit was reached |
@@ -327,7 +325,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 
 > Note: `vsftp_failed_logins_total` counts `FAIL LOGIN` events; `vsftp_authentication_errors_total` counts only `530` response lines. vsftpd emits both a `FAIL LOGIN` line and a `530 FTP response` line for the same failed login; authentication errors are no longer summed from both.
 
-### Client and User Metrics (requires vsftpd.log)
+### Client, User, and File Metrics
 
 | Metric | Type | Labels | Description |
 | -------- | ---- | ---- | ---- |
@@ -335,14 +333,16 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 | `vsftp_unique_clients` | Gauge | - | Number of unique active clients in the last 5 minutes |
 | `vsftp_user_logins_total` | Counter | `username` | Total successful logins per username |
 | `vsftp_user_connections_total` | Counter | `username` | Total connections per username |
-| `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction |
-| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction; `file_type` is the lowercase extension directly (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one. A newly seen label is first registered at 0 and its counts committed after the next scrape, so `increase($__range)` can observe the first increment |
+| `vsftp_login_total` | Counter | `-` | Total number of FTP logins (source: vsftpd.log) |
+| `vsftp_last_login_time` | Gauge | `-` | Unix timestamp of the last successful login (source: vsftpd.log) |
+| `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction (source: xferlog) |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction (source: xferlog); `file_type` is the lowercase extension (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one. A newly seen label is first registered at 0 and its counts committed after the next scrape, so `increase($__range)` can observe the first increment |
 
 ### Advanced Metrics (requires vsftpd.log)
 
 | Metric | Type | Description |
 | -------- | ---- | ---- |
-| `vsftp_connection_login_delay_seconds` | Histogram | CONNECT-to-LOGIN delay distribution (buckets: 1ms~16s) |
+| `vsftp_connection_login_delay_seconds` | Histogram | CONNECT-to-LOGIN delay distribution (buckets: 1ms~65s exponential) |
 | `vsftp_rapid_reconnections_total` | Counter | Rapid reconnections (same IP reconnecting within 30 s) |
 | `vsftp_active_processes` | Gauge | Number of active vsftpd processes in the last 5 minutes |
 
@@ -377,9 +377,10 @@ scrape_configs:
 | FrequentConnectionTimeouts | warning | Connection timeout rate > 3/min |
 | FrequentAuthenticationErrors | warning | Authentication error rate > 5/min (possible brute force) |
 | RapidReconnections | info | Rapid reconnection rate > 10/min |
-| HighBandwidthUsage | info | Bandwidth > 100 MB/s |
+| HighBandwidthUsage | info | Bandwidth > 100 MiB/s (104857600 B/s) |
+| HighFTPErrorRate | warning | FTP protocol error rate > 5/min over 5 minutes (all reasons combined) |
 | MaxConnectionsReached | warning | Max-connections limit reached |
-| VsftpdExporterDown | critical | Exporter itself unavailable for more than 2 minutes |
+| VsftpExporterDown | critical | Exporter itself unavailable for more than 2 minutes |
 
 Enable alert rules by uncommenting `rule_files` in `prometheus.yml`:
 
@@ -393,7 +394,7 @@ rule_files:
 `deploy/grafana-dashboard.json` provides a preconfigured dashboard with the following panels:
 
 - Service status overview: FTP service status, total connections, active connections, unique clients, active processes
-- Transfer statistics: upload/download counts, byte increments and total logins (as increments within the selected time range), last login time split into separate date and time rows, average upload/download/total bandwidth over the selected time range, connection state trend, transfer rate (MB/s)
+- Transfer statistics: upload/download counts, byte increments and total logins (as increments within the selected time range), last login time split into separate date and time rows, average upload/download/total bandwidth over the selected time range, connection state trend, transfer rate (MiB/s)
 - Error monitoring: failed logins, authentication errors, connection timeouts, max-connections limit, rapid reconnections, and FTP protocol error rates split by `reason`
 
 Dashboard features:
@@ -415,12 +416,12 @@ Log in to Grafana → click "+" → "Import" → upload `deploy/grafana-dashboar
 vsftp_login_success
 
 # Files transferred per minute
-rate(vsftp_upload_total[1m]) + rate(vsftp_download_total[1m])
+rate(vsftp_upload_total[1m]) * 60 + rate(vsftp_download_total[1m]) * 60
 
-# Average transfer speed (MB/s)
+# Average transfer speed (MiB/s)
 vsftp_average_transfer_speed_bytes_per_second / 1024 / 1024
 
-# Upload/download throughput (MB/s)
+# Upload/download throughput (MiB/s)
 rate(vsftp_upload_bytes_total[5m]) / 1024 / 1024
 rate(vsftp_download_bytes_total[5m]) / 1024 / 1024
 
@@ -437,7 +438,7 @@ sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
 rate(vsftp_ftp_errors_total{reason="dir_not_found"}[5m])
 
 # Files transferred per extension per minute (upload + download)
-sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
+sum by (file_type) (rate(vsftp_files_by_type_total[5m]) * 60)
 
 # ts upload rate (files per minute)
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60

@@ -173,7 +173,7 @@ cp configs/config.example.json configs/config.json
 | `ssh_port` | string | 否 | `22` | SSH 端口 |
 | `ssh_user` | string | 否 | - | SSH 用户名（`need_ssh=true` 时必需） |
 | `ssh_password` | string | 否 | - | SSH 密码（`need_ssh=true` 时必需） |
-| `Xferlog_file_path` | string | 否 | - | xferlog 传输日志路径，支持环境变量和相对路径 |
+| `Xferlog_file_path` | string | 否 | - | xferlog 传输日志路径,支持相对路径与环境变量(仅本地 need_ssh=false 模式展开,SSH 模式不展开且路径不允许 `$`/单引号/空白等特殊字符);环境变量建议用 `${VAR}` 形式避免贪婪匹配,`os.ExpandEnv` 单次展开(字面 `$$` 会变空) |
 | `listen_port` | string | 否 | `9101` | Exporter HTTP 监听端口 |
 | `check_interval` | int | 否 | `30` | 采集间隔（1-3600 秒） |
 | `vsftplog_enabled` | bool | 否 | `false` | 是否启用 vsftpd.log 详细日志解析 |
@@ -247,7 +247,7 @@ curl http://localhost:9101/health
 ```
 
 SSH 模式下，exporter 会通过 SSH 执行 `ss -tnH` 统计连接状态，用 `tail -c +N` / `cat` 增量读取日志，并用 `stat` 检测日志轮转。SSH 用户需要有读取日志文件和执行 ss 的权限。
-
+> **安全警示**>> - **SSH 主机密钥不校验(MITM 风险)**:exporter 使用 `ssh.InsecureIgnoreHostKey()`(见 `cmd/ssh.go`),对 SSH 服务器的主机密钥不做验证,存在中间人攻击风险。请仅在可信内网中使用,并限制监听端口与访问来源。> - **明文密码**:`configs/config.json` 以明文保存 SSH/FTP 密码。请通过文件权限(`chmod 600`)限制访问,并切勿将配置文件提交到版本库(`configs/config.json` 已被 `.gitignore` 排除)。> - **监听端口**:默认 `listen_port` `9101` 请勿直接暴露到公网,建议配合防火墙/反向代理限制访问。
 ### systemd 服务
 
 创建 `/etc/systemd/system/vsftp-exporter.service`：
@@ -288,7 +288,6 @@ sudo systemctl enable --now vsftp-exporter
 
 | 指标名称 | 类型 | 说明 |
 | -------- | ---- | ---- |
-| `vsftp_login_total` | Counter | FTP 登录总次数 |
 | `vsftp_upload_total` | Counter | 上传操作总次数 |
 | `vsftp_download_total` | Counter | 下载操作总次数 |
 | `vsftp_upload_bytes_total` | Counter | 上传字节总数 |
@@ -296,14 +295,13 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_transfer_duration_seconds` | Histogram | 传输耗时分布（桶: 0.1s~51.2s 指数分布） |
 | `vsftp_average_transfer_speed_bytes_per_second` | Gauge | 平均传输速度（字节/秒） |
 | `vsftp_bandwidth_usage_bytes_per_second` | Gauge | 当前带宽使用率（字节/秒） |
-| `vsftp_last_login_time` | Gauge | 最后成功登录的 Unix 时间戳 |
 
 ### 错误和异常指标
 
 | 指标名称 | 类型 | 标签 | 说明 |
 | -------- | ---- | ---- | ---- |
 | `vsftp_failed_logins_total` | Counter | - | 登录失败总次数（按 FAIL LOGIN 事件） |
-| `vsftp_transfer_errors_total` | Counter | `type` | 传输错误总数（upload/download/timeout） |
+| `vsftp_transfer_errors_total` | Counter | `type` | 传输错误总数(upload/download) |
 | `vsftp_connection_timeouts_total` | Counter | - | 连接超时总次数 |
 | `vsftp_authentication_errors_total` | Counter | - | 认证错误总次数（仅统计 530 响应，已去除 FAIL LOGIN 重复计数） |
 | `vsftp_max_connections_reached_total` | Counter | - | 达到最大连接数限制次数 |
@@ -327,7 +325,7 @@ sudo systemctl enable --now vsftp-exporter
 
 > 说明：`vsftp_failed_logins_total` 按 `FAIL LOGIN` 事件计数，`vsftp_authentication_errors_total` 仅按 `530` 响应行计数。vsftpd 对同一次失败登录会同时输出 `FAIL LOGIN` 与 `530 FTP response` 两行，二者不再重复累加认证错误。
 
-### 客户端和用户统计指标（需启用 vsftpd.log）
+### 客户端、用户与文件统计指标
 
 | 指标名称 | 类型 | 标签 | 说明 |
 | -------- | ---- | ---- | ---- |
@@ -335,14 +333,16 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_unique_clients` | Gauge | - | 最近 5 分钟内活跃的唯一客户端数 |
 | `vsftp_user_logins_total` | Counter | `username` | 按用户名统计的成功登录总数 |
 | `vsftp_user_connections_total` | Counter | `username` | 按用户名统计的连接总数 |
-| `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数 |
-| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数，`file_type` 直接为小写后缀（如 `ts`/`mp4`/`mkv`），无后缀时为 `no_extension`。首次见到的标签先以 0 值注册、待下一次抓取后再提交增量，保证 `increase($__range)` 能观测到首次增量 |
+| `vsftp_login_total` | Counter | `-` | FTP 登录总次数(来源:vsftpd.log) |
+| `vsftp_last_login_time` | Gauge | `-` | 最后成功登录的 Unix 时间戳(来源:vsftpd.log) |
+| `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数(来源:xferlog) |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数(来源:xferlog),`file_type` 为小写后缀(如 `ts`/`mp4`/`mkv`),无后缀为 `no_extension`。首次见到的标签先以 0 值注册、下一次抓取后再提交增量,保证 `increase($__range)` 能观测到首次增量 |
 
 ### 高级监控指标（需启用 vsftpd.log）
 
 | 指标名称 | 类型 | 说明 |
 | -------- | ---- | ---- |
-| `vsftp_connection_login_delay_seconds` | Histogram | CONNECT 到 LOGIN 的延迟分布（桶: 1ms~16s） |
+| `vsftp_connection_login_delay_seconds` | Histogram | CONNECT 到 LOGIN 的延迟分布(桶: 1ms~65s 指数分布) |
 | `vsftp_rapid_reconnections_total` | Counter | 快速重连次数（同一 IP 30 秒内重连） |
 | `vsftp_active_processes` | Gauge | 最近 5 分钟内活跃的 vsftpd 进程数 |
 
@@ -377,7 +377,7 @@ scrape_configs:
 | FrequentConnectionTimeouts | warning | 连接超时率 > 3 次/分钟 |
 | FrequentAuthenticationErrors | warning | 认证错误率 > 5 次/分钟（可能暴力破解） |
 | RapidReconnections | info | 快速重连率 > 10 次/分钟 |
-| HighBandwidthUsage | info | 带宽 > 100 MB/s |
+| HighBandwidthUsage | info | 带宽 > 100 MiB/s (104857600 B/s) |
 | HighFTPErrorRate | warning | 5 分钟内 FTP 协议错误率 > 5 次/分钟(全部原因合计) |
 | MaxConnectionsReached | warning | 达到最大连接数限制 |
 | VsftpExporterDown | critical | Exporter 自身不可用超过 2 分钟 |
@@ -415,12 +415,12 @@ rule_files:
 vsftp_login_success
 
 # 每分钟传输文件数
-rate(vsftp_upload_total[1m]) + rate(vsftp_download_total[1m])
+rate(vsftp_upload_total[1m]) * 60 + rate(vsftp_download_total[1m]) * 60
 
-# 平均传输速度 (MB/s)
+# 平均传输速度 (MiB/s)
 vsftp_average_transfer_speed_bytes_per_second / 1024 / 1024
 
-# 上传/下载流量 (MB/s)
+# 上传/下载流量 (MiB/s)
 rate(vsftp_upload_bytes_total[5m]) / 1024 / 1024
 rate(vsftp_download_bytes_total[5m]) / 1024 / 1024
 
@@ -437,7 +437,7 @@ sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
 rate(vsftp_ftp_errors_total{reason="dir_not_found"}[5m])
 
 # 各后缀文件每分钟传输数（上传+下载）
-sum by (file_type) (rate(vsftp_files_by_type_total[5m]))
+sum by (file_type) (rate(vsftp_files_by_type_total[5m]) * 60)
 
 # ts 文件上传速率 (个/分钟)
 rate(vsftp_files_by_type_total{file_type="ts", direction="upload"}[5m]) * 60

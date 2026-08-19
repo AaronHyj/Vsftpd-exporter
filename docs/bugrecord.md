@@ -4,7 +4,7 @@
 
 ## 审查信息
 
-- 审查日期:2026-08-07(第一轮)/ 2026-08-07(第二轮)/ 2026-08-09(第三轮深度审查与修复)/ 2026-08-12(第四轮全面审查与修复)/ 2026-08-12(第五轮复查:连接数监听套接字污染、FTP握手超时计数、README 告警文档同步)/ 2026-08-12(第六轮复查:README 桶范围错误、FTP response 正则捕获用户名、NAT CONNECT 过滤限制)/ 2026-08-12(第七至十轮深度复查:并发安全、PromQL 语义、过滤条件优先级、四方一致性、冗余指标、测试隔离)
+- 审查日期:2026-08-08(第一轮)/ 2026-08-08(第二轮)/ 2026-08-09(第三轮深度审查与修复)/ 2026-08-12(第四轮全面审查与修复)/ 2026-08-12(第五轮复查:连接数监听套接字污染、FTP握手超时计数、README 告警文档同步)/ 2026-08-12(第六轮复查:README 桶范围错误、FTP response 正则捕获用户名、NAT CONNECT 过滤限制)/ 2026-08-12(第七至十轮深度复查:并发安全、PromQL 语义、过滤条件优先级、四方一致性、冗余指标、测试隔离)/ 2026-08-19(第十一至十二轮专项复核:SSH 存活探测并发锁、FTP 握手 deadline 设置、连接数端口后缀误匹配、负 fileSize counter panic、README 指标来源与安全警示、告警名拼写)/ 2026-08-19(第十三轮:HTTP 服务与指标语义、PromQL 与单位一致性、运行时冒烟测试)/ 2026-08-20(第十四轮:配置校验边界、ss 去重逻辑、go 模块一致性、Makefile .PHONY)
 - 审查范围:`cmd/` 全部源码(main.go / config.go / metrics.go / ssh.go / parsers.go / tests)、Makefile、`deploy/grafana-dashboard.json`、`deploy/alerts.yml.example`、`docs/bugrecord.md`、`README.md`
 - 审查重点:仪表盘指标覆盖完整性、告警规则聚合正确性、summary_exclude 遗漏、活跃度指标静默期衰减、带宽告警改用 PromQL rate、仪表盘新增面板、连接数指标误计监听套接字、FTP 握手超时计数、README 与告警规则一致性、README 桶范围描述错误、FTP response 正则捕获用户名增强、NAT CONNECT 过滤限制
 - 验证命令:`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -v -race ./...`、`python3 -c "import json; json.load(open('deploy/grafana-dashboard.json'))"`
@@ -59,6 +59,21 @@
 | BUG-044 | 低 | `cmd/main.go` checkFTPLogin | 第二个 `ftp.Dial`(FTP 握手阶段)超时不计数 `connectionTimeoutsTotal`,FrequentConnectionTimeouts 告警统计不完整 | 已修复 |
 | BUG-045 | 低 | `README.md` | 指标表 `vsftp_transfer_duration_seconds` 桶范围描述为"0.1s~102.4s",实际代码 `ExponentialBuckets(0.1, 2, 10)` 最大桶为 51.2s | 已修复 |
 | BUG-046 | 中 | `cmd/parsers.go` ftpResponseRegex | FTP response 正则未捕获 `[user]` 用户名,NAT 场景下探测 IP 与日志 Client IP 不一致时 `summary_exclude` 无法按用户名过滤探测的错误响应(530 等) | 已修复 |
+| BUG-047 | 低 | `README_EN.md` | 英文版 README 文档与中文版不同步:`vsftp_transfer_duration_seconds` 桶范围仍写 "0.1s~102.4s"(应为 51.2s);告警表缺失 `HighFTPErrorRate` 行 | 已修复 |
+| BUG-048 | 中 | `cmd/config.go` | `os.ExpandEnv` 展开环境变量路径为死代码:`isValidFilePath`(正则排除 `$`、`{}`、`~`)在展开前先校验,任何含环境变量引用的路径都被拒绝,展开逻辑永远到不了,与 README"支持环境变量"承诺不符 | 已修复 |
+| BUG-049 | 高 | `cmd/main.go` checkFTPLogin | `ftp.Dial` 用 `DialWithNetConn` 时跳过库自身的 context 超时,握手(220)与 `Login` 读取无 deadline;服务器接受 TCP 但迟迟不返回 220 时,`ftp.Dial`/`Login` 无限阻塞,监控协程(ticker 同步调用)卡死,探活与 /health 全部停滞 | 已修复 |
+| BUG-050 | 中 | `cmd/metrics.go` | `vsftp_connection_login_delay_seconds` 桶 `ExponentialBuckets(0.001,2,15)` 最大桶 16.384s,但观测 guard 允许 `delay<=60`,17~60s 的观测全部落入 +Inf,面板 99 分位延迟失真;扩桶到 17 桶(最大 65.5s)覆盖 60s | 已修复 |
+| BUG-051 | 中 | `cmd/vsftp-exporter_test.go` | 测试操作全局 package 级指标且无隔离:`TestParseFTPLogFilesByTypeCounter`/`TestParseFTPLogFilesByTypeColdStart` 依赖 CounterVec 从 0 起点,`go test -count>1` 或并行时互相污染而失败 | 已修复 |
+| BUG-052 | 中 | `cmd/main.go`、`cmd/ssh.go` | IPv6 地址拼接错误:`isValidHost` 校验放行裸 IPv6(`::1`),但连接处用 `host+":"+port` 拼出 `::1:21`,`net.Dial` 报 "too many colons";改用 `net.JoinHostPort` | 已修复 |
+| BUG-053 | 中 | `cmd/parsers.go` parseSSOutput | 端口匹配用 `strings.HasSuffix(":"+ftpPort)` 后缀比较:随机客户端端口(如 `:56069` 以 `:6069` 结尾)或 `:210`/`:2169`(以 `:21` 结尾)会被误判为 FTP 连接,污染 `vsftp_connections` 等连接数指标 | 已修复 |
+| BUG-054 | 高 | `cmd/parsers.go` | 畸形 xferlog/vsftpd.log 出现**负 fileSize/bytes** 时,`strconv.ParseInt` 不报错但把负值传入 `prometheus counter.Add`(client_golang v1.19 在 v<0 时 `panic("counter cannot decrease")`),`runChecks` 无 recover,整个监控协程崩溃停止采集 | 已修复 |
+| BUG-055 | 中 | `README.md`、`README_EN.md` | 指标来源标注错误:`vsftp_login_total`、`vsftp_last_login_time` 实际需 vsftpd.log 却放在"传输统计"表;`vsftp_client_files_total`、`vsftp_files_by_type_total` 实际来自 xferlog 却被标"需启用 vsftpd.log",误导用户配置 | 已修复 |
+| BUG-056 | 低 | `README.md`、`README_EN.md` | 全篇无安全警示,`ssh.InsecureIgnoreHostKey()`(MITM 风险)与 config.json 明文密码均未告知用户 | 已修复 |
+| BUG-057 | 低 | `README_EN.md` | 告警名拼写 `VsftpdExporterDown`(多 d)与 `deploy/alerts.yml.example`、`README.md` 的 `VsftpExporterDown` 不一致 | 已修复 |
+| BUG-058 | 中 | `cmd/main.go` monitor 协程 | 监控协程在 ticker 循环里直接调用 `runChecks`,无任何 panic 兜底;BUG-054 已证明畸形输入可触发 `prometheus counter.Add(v<0)` panic,一旦发生整个监控协程崩溃、所有指标静默停滞,而 `/metrics`/`/health` 仍存活造成报警盲区 | 已修复 |
+| BUG-059 | 中 | `README.md`、`README_EN.md` | 指标文档小节与表格损坏:带标签指标(`vsftp_client_files_total`/`vsftp_files_by_type_total`/登录指标)被拆分到 3 列表(传输统计)与 4 列表(客户端统计)之间,来源标注与文档列数不一致、`vsftp_client_files_total` 一度丢失;且 `Xferlog_file_path` 的"支持环境变量"未说明仅限本地模式 | 已修复 |
+| BUG-060 | 中 | `README.md`、`README_EN.md`、`deploy/grafana-dashboard.json` | 查询示例与单位标注不一致:`vsftp_transfer_errors_total` 的 `type` 文档写 "(upload/download/timeout)" 但代码只产 upload/download(timeout 永不产生,`type="timeout"` 查询恒空);"每分钟"的 `rate()` 未乘 60(rate 实际是次/秒,注释与数值口径不符);带宽换算 `/1024/1024`(MiB) 却标注/渲染为 MB/s(dashboard 面板14 unit=MBs + 标题,README 注释),显示偏差约 4.6% | 已修复 |
+| BUG-061 | 低 | `Makefile` | `.PHONY` 声明不全: `all`、`coverage`、`tidy`、`build-all`、`build-linux`、`build-windows`、`build-darwin` 未在 `.PHONY` 中声明。GNU make 默认把这些目标视为文件名(若存在同名文件则跳过 recipe),虽当前无同名文件无害,但重构时可能产生意外跳过。 | 已修复 |
 
 ## 详细说明
 
@@ -464,13 +479,166 @@
 4. 同步更新 `TestFTPResponseRegex` 的测试用例(增加 username 字段与新断言)。
 5. 新增 `TestFTPResponseSummaryExcludeByUsername` 回归测试,验证 NAT 场景下 ostore 的 530 按用户名过滤。
 
+### BUG-047:英文版 README 与中文版不同步(低)
+
+**位置**:`README_EN.md`
+
+**问题**:此前 BUG-045 修复中文版 `README.md` 时,遗漏了英文版 `README_EN.md`:
+1. `vsftp_transfer_duration_seconds` 桶范围仍写 "0.1s~102.4s"(应为 "0.1s~51.2s")。
+2. 告警表缺失 `HighFTPErrorRate` 行(中文版已新增该告警)。
+
+**修复**:
+1. 将英文版桶范围改为 "0.1s~51.2s exponential"。
+2. 在 `HighBandwidthUsage` 与 `MaxConnectionsReached` 之间补入 `HighFTPErrorRate` 行,与 `deploy/alerts.yml.example` 及中文版保持一致。
+
+### BUG-048:环境变量路径展开是死代码(中)
+
+**位置**:`cmd/config.go` isValidFilePath / expandLogFilePath
+
+**问题**:`expandLogFilePath` 里的 `os.ExpandEnv` 意图支持 `$VAR`/`${VAR}` 路径(README 承诺支持环境变量),但 `isValidFilePath`(正则 `^[a-zA-Z0-9/_.\-]+$`)在任何展开**之前**先对原始路径校验,而该正则排除 `$`、`{`、`}`、`~`。因此任何含环境变量引用的路径都在 `isValidFilePath` 处被拒,`os.ExpandEnv` 对任何能通过校验的输入都不产生效果——是死代码,环境变量路径实际永远无法使用。
+
+**修复**:将校验顺序调整为——本地模式先 `expandLogFilePath`(展开 env + 绝对化 + clean),再对**展开后的最终路径**做 `isValidFilePath` 校验与 `checkLogFileAccess`;SSH 模式保持对原始路径校验(因原始路径会拼入远端 shell 命令 `fp='...'`,须排除单引号等注入字符,且 SSH 模式下不展开环境变量)。
+
+### BUG-049:FTP 握手与登录读取无超时,可致监控协程永久阻塞(高)
+
+**位置**:`cmd/main.go` checkFTPLogin
+
+**问题**:`checkFTPLogin` 同时使用 `ftp.DialWithNetConn(conn)`(提供现成 TCP 连接)与 `ftp.DialWithTimeout(10s)`。经核对 jlaffaye/ftp v0.2.0 源码:当 `DialWithNetConn` 设置了 `dialFunc` 后,`Dial` 内部 `if dialFunc == nil` 分支(其中根据 context 建立超时)被跳过,`DialWithTimeout` 只设置 `do.dialer.Timeout`,而该 dialer 在 `DialWithNetConn` 下根本不使用。结果握手阶段读取 220 横幅(`ReadResponse`)与 `Login` 读取均无任何 deadline。
+
+**影响**:服务器接受 TCP 连接但迟迟不返回 220(或登录时挂起)时,`ftp.Dial`/`ftpConn.Login` 无限阻塞。由于 `checkFTPLogin` 在监控协程的 ticker 循环里**同步**调用,阻塞会卡死整个监控协程:`lastProbe` 不再更新、后续 check 全部停止,`/health` 与探活指标失效。
+
+**修复**:在调用 `ftp.Dial` 前对底层 `conn` 显式 `conn.SetDeadline(time.Now().Add(10s))`,覆盖握手与登录读取;再用 `defer conn.SetDeadline(time.Time{})`(LIFO 在 `defer ftpConn.Quit()` 之后先执行)清除,确保 `Quit` 能正常发出。
+
+### BUG-050:连接登录延迟直方图桶上界与观测范围不匹配(中)
+
+**位置**:`cmd/metrics.go` connectionLoginDelaySeconds
+
+**问题**:观测 guard 为 `delay>=0 && delay<=60`(parsers.go),但 `connectionLoginDelaySeconds` 桶 `ExponentialBuckets(0.001, 2, 15)` 最大桶仅 16.384s。17~60s 的合法观测值全部落入 `+Inf` 桶,导致面板 27 的 99 分位延迟严重失真。
+
+**修复**:扩桶到 `ExponentialBuckets(0.001, 2, 17)`(最大桶 65.536s),覆盖 60s 观测上限;同步更新 README 中英文桶范围描述("1ms~16s" → "1ms~65s")。
+
+### BUG-051:文件类型计数测试因全局指标污染在 count>1 时失败(中)
+
+**位置**:`cmd/vsftp-exporter_test.go`
+
+**问题**:`TestParseFTPLogFilesByTypeCounter` 与 `TestParseFTPLogFilesByTypeColdStart` 操作全局 `filesByTypeTotal` CounterVec 并依赖其从 0 起点。`-count=1`(默认)时 Go 在同一进程内重复执行测试,首次运行遗留的 CounterVec 值污染第二次运行(`committedTypeLabels` 状态 + 非零起点),`go test -count=2 -run '...FilesByType...'` 失败。CI 若做了重复执行或并行会随机翻红。
+
+**修复**:在两个测试函数开头调用 `filesByTypeTotal.Reset()`,使每次运行从干净状态开始(已用 `go test -count=2` 验证通过)。
+
+### BUG-052:IPv6 地址字面量拼接错误导致连接失败(中)
+
+**位置**:`cmd/main.go` checkFTPLogin、`cmd/ssh.go` createSSHClient
+
+**问题**:`isValidHost` 通过 `net.ParseIP` 放行裸 IPv6(如 `::1`),但所有连接处用 `host+":"+port` 拼接出 `::1:21`,`net.Dial`/`ssh.Dial` 解析报 `too many colons in address`。方括号写法 `[::1]` 又会被 `isValidHost` 判为非 IP 且域名校验失败而拒绝。结果是:IPv6 地址要么被校验拒绝,要么校验通过但运行时必然连不上(FTP 与 SSH 两条路径都中招)。
+
+**修复**:所有 `host+":"+port` 拼接改为 `net.JoinHostPort(config.TargetHost, config.XPort)`,IPv4 与 IPv6 均正确(`[::1]:21`)。
+
+
+
+### BUG-053:连接数指标端口后缀误匹配(中)
+
+**位置**:`cmd/parsers.go` parseSSOutput
+
+**问题**:用 `strings.HasSuffix(localAddr, ":"+ftpPort)` / `HasSuffix(peerAddr, portSuffix)` 判断某行是否是该 FTP 端口的连接。这是**字符串后缀匹配**而非**端口精确比较**:任何以 FTP 端口串结尾的端口都会被误判。例如目标端口 `6069` 时,随机客户端端口 `:56069`(客户端连接 MySQL):`HasSuffix("172.25.234.5:56069", ":6069")` 为 true → 误计为一条 FTP 连接;FTP 端口 `21` 时 `:210`、`:321`、`:2169` 等全部以 `:21` 结尾被误计。污染 `vsftp_connections`/`vsftp_established_connections`/`vsftp_close_wait_connections`(直接 Set)。
+
+**修复**:改为按地址最后一个冒号之后的**完整端口 token** 与 `ftpPort` 精确比较,新增 `parseSSPort(addr)`(用 `strings.LastIndex` 提取末段端口),IPv4/IPv6(`[::1]:21`)/IPv4-mapped(`::ffff:1.2.3.4:21`)均正确处理。
+
+### BUG-054:负 fileSize 触发 counter panic,监控协程崩溃(高)
+
+**位置**:`cmd/parsers.go` parseStandardXferlog 与 vsftpd.log 的 bytes 解析
+
+**问题**:xferlog 第 8 字段(fileSize)或 vsftpd.log 的传输字节为**有符号负数**(畸形/损坏日志)时,`strconv.ParseInt("-23", 10, 64)` 不返回 error,负值被 `uploadBytesTotal.Add(float64(-23))` 等消费。Prometheus client_golang v1.19 的 `counter.Add` 在 `v < 0` 时直接 `panic("counter cannot decrease in value")`;`cmd/` 无任何 `recover()`,panic 沿 `parseFTPLog → runChecks → 监控协程` 一路向上,导致**整个监控协程终止、所有指标停止更新**(已验证可复现 panic)。对比 transferTime 有 `>0` 保护、direction 有 else 兜底,唯独大小没有防护。
+
+**修复**:在解析处对负值 clamp 为 0——`parseStandardXferlog` 的 fileSize,及 vsftpd.log upload/download 两个分支的 `bytes`;保证传入 counter 的值非负、counter 单调性不被破坏。附回归测试验证不再 panic。
+
+### BUG-055:README 指标来源标注错误(中)
+
+**位置**:`README.md`、`README_EN.md` 指标表
+
+**问题**:`vsftp_login_total`、`vsftp_last_login_time` 由 `parseVsftpdLog` 的 OK LOGIN 分支产生(**需 vsftpd.log**),却放在"传输统计指标"(暗示只配 xferlog);`vsftp_client_files_total`、`vsftp_files_by_type_total` 由 `parseFTPLog`(xferlog)产生(**不需 vsftpd.log**),却被放在"需启用 vsftpd.log"的客户端统计表。只配 xferlog 时两个登录指标恒为 0,与此处文档暗示冲突,误导配置。
+
+**修复**:将 `vsftp_login_total`/`vsftp_last_login_time` 移入"客户端和用户统计指标(需启用 vsftpd.log)"并注明来源;将 `vsftp_client_files_total`/`vsftp_files_by_type_total` 移入"传输统计指标"并注明来源为 xferlog。中英文同步。
+
+### BUG-056:README 缺少安全警示(低)
+
+**位置**:`README.md`、`README_EN.md`
+
+**问题**:全篇无安全提示。`cmd/ssh.go` 用 `ssh.InsecureIgnoreHostKey()`(不对主机密钥校验,MITM 风险),且 `configs/config.json` 明文存 SSH/FTP 密码,但用户文档从未告知,bugrecord 已记为限制而不为人知。
+
+**修复**:SSH 远程监控小节补充"安全警示":主机密钥不校验的 MITM 风险、明文密码建议 `chmod 600`、监听端口勿暴露公网。中英文同步。
+
+### BUG-057:英文 README 告警名拼写不一致(低)
+
+**位置**:`README_EN.md`
+
+**问题**:告警表将 `VsftpExporterDown`(与 `deploy/alerts.yml.example`、`README.md` 一致)误写为 `VsftpdExporterDown`(多一个 d),查表时会找不到实际告警。
+
+**修复**:统一为 `VsftpExporterDown`。
+
+
+### BUG-058:监控协程无 panic 兜底,异常可将采集静默停摆(中)
+
+**位置**:`cmd/main.go` monitor 协程
+
+**问题**:监控协程(ticker goroutine)直接调用 `runChecks`,该调用链没有 `recover()`。BUG-054 已证明畸形 xferlog/vsftpd.log 的负值会触发 `prometheus counter.Add(v<0)` panic(已修复),但这说明"契约外部异常可能把 panic 抛上来"。一旦 `runChecks` 内出现任何未捕获 panic,监控协程 goroutine 直接终止,所有指标不再更新;而 HTTP `/metrics`、`/health` 由独立 goroutine 服务,仍返回旧值——exporter 表面"存活"但数据停滞,构成告警盲区。
+
+**修复**:新增 `safeRunChecks` 包装函数,用 `defer recover()` 捕获 panic 并记录日志;监控协程的初始调用与 ticker 周期调用均改用 `safeRunChecks`。panic 时记录一条 error 日志、跳过本轮,下一轮自然恢复(协程不退出,周期性重新执行)。
+
+
+### BUG-059:README 指标表来源标注与表格损坏(中)
+
+**位置**:`README.md`、`README_EN.md` 指标表
+
+**问题**:指标文档小节划分不清晰——带 `client_ip`/`file_type` 标签的指标被放进只有 3 列(名称/类型/说明)的"传输统计指标"表,与 4 列表(含"标签"列)的"客户端和用户统计指标"混用;`vsftp_client_files_total` 一度从表中丢失;`Xferlog_file_path` 行写"支持环境变量"却未注明**仅本地 `need_ssh=false` 模式才展开**(SSH 模式不展开且拒绝 `$`/引号/空白等注入字符)。导致文档列数渲染不齐、指标来源(需 vsftpd.log vs 不需)误导用户。
+
+**修复**:
+1. 将带标签指标(`vsftp_client_files_total`、`vsftp_files_by_type_total`、`vsftp_login_total`、`vsftp_last_login_time`)统一放入 4 列表,并给无标签的登录指标补 `-` 标签列,保证每列对齐。
+2. 表标题改为中性的"客户端、用户与文件统计指标",不再隐含"需启用 vsftpd.log";各指标在说明中标注来源(xferlog / vsftpd.log)。
+3. `Xferlog_file_path` 说明补充环境变量仅本地模式展开、SSH 模式路径受限的边界。中英文同步。
+
+
+
+### BUG-060:查询示例与单位标注不一致(中)
+
+**位置**:`README.md`、`README_EN.md`、`deploy/grafana-dashboard.json`
+
+**问题**(PromQL 全量核对 + 独立验证发现):
+1. **`type` 标签取值不符**:`vsftp_transfer_errors_total` 文档描述 `type` 为 "(upload/download/timeout)",但代码 (`parsers.go:399/401`) 只通过 `WithLabelValues("upload"/"download")` 递增,**`"timeout"` 永不产生** → `type="timeout"` 的查询恒空。
+2. **"每分钟"口径错**:README/EN 多处 `# 每分钟传输文件数`、`# 各后缀文件每分钟传输数` 注释对应 `rate(...[5m])`,而 `rate` 返回的是**每秒**速率,未乘 `* 60`,注释与数值口径不符(仅 `ts upload rate` 一处正确乘了 60)。
+3. **MB/s vs MiB/s**:带宽换算 `/1024/1024`(二进制 MiB)却标注/渲染为 MB/s(dashboard 面板14 `unit=MBs`、`axisLabel=MB/s`、标题 "(MB/s)";README 注释 "(MB/s)"),显示值偏差约 4.6%。
+
+**修复**:
+1. 两 README 的 `type` 改为 "upload/download"。
+2. 两 README 的"每分钟"查询补 `* 60`,使其确实为次/分钟。
+3. dashboard 面板14 `unit` 改 `decmibs`、`axisLabel` 改 `MiB/s`、标题改 "(MiB/s)",两 README 注释同步为 "(MiB/s)",与 `/1024/1024` 的实际 MiB 语义一致(并与此前带宽告警统一的 "100 MiB/s" 口径一致)。
+
+
+### BUG-061:Makefile .PHONY 声明不全(低)
+
+**位置**:`Makefile`
+
+**问题**:`.PHONY: build run test clean fmt vet install help` 只包含 8 个目标,
+`all`、`coverage`、`tidy`、`build-all`、`build-linux`、`build-windows`、`build-darwin` 均未在 `.PHONY` 中声明。
+GNU make 默认将未声明为 `.PHONY` 的目标视为文件名目标:若存在同名文件则跳过 recipe。
+当前不存在同名文件,实际无害,但重构或创建同名文件时可能产生意外跳过。
+
+**修复**:在 `.PHONY` 行补全所有 target。
 ## 已知特性说明
 
 | 编号 | 说明 |
 |------|------|
 | KNOWN-002 | `vsftp_bandwidth_usage_bytes_per_second` 语义有限：单事件轮次（时间跨度=0）不更新；事件时间跨度大（日志空档）时会算出一个偏小的"平均带宽"。建议以 PromQL `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m])` 为主。 |
 | KNOWN-003 | `vsftp_average_transfer_speed_bytes_per_second` 的除数是程序总运行时长（`state.lastProcessedTime` 仅在启动时初始化、不再更新），即"总字节/总运行时长"；字段名 `lastProcessedTime` 有误导性。 |
-| KNOWN-004 | 登录探测的成功事件仍会计入日志派生态指标（`vsftp_user_logins_total`、`vsftp_ftp_login_total`、`vsftp_user_connections_total`、`vsftp_client_connections_total` 等）。需使用专用探测账号或在部署侧排除 exporter 自身 IP 才能完全消除（承接 BUG-001 遗留建议）。 |
+| KNOWN-004 | 探测污染过滤依赖 `summary_exclude` 与 `probeClientIP`:`OK LOGIN`/`FAIL LOGIN`/FTP response 可同时按探测用户名 `FTPUser` 或 IP 过滤(`parsers.go:606/639/727`);但 `CONNECT` 事件只含 IP、只能按 `probeClientIP` 过滤,且 `probeClientIP` 仅在探测成功时由 `conn.LocalAddr()` 设置——若探测自启动起持续失败(`probeClientIP==""`)或经 NAT 后源 IP 与日志 Client IP 不一致,`CONNECT`/`clientConnectionsTotal`/`rapidReconnections` 会漏。建议用专用探测账号并设置 `summary_exclude=true`(OK/FAIL/FTP-response 已默认覆盖)。 |
 | KNOWN-005 | `state.probeClientIP` 仅在探测成功时更新;探测失败(如 FTP 端口不可达)时保留上一次成功值。因 exporter 自身 IP 一般稳定,影响有限;若 exporter 网络出口 IP 变化,`summary_exclude` 可能无法过滤新的探测来源 IP。 |
 | KNOWN-006 | CONNECT 事件无用户名信息,仅含来源 IP。NAT/网关场景下,探测连接的来源 IP 经转换后与 `state.probeClientIP`(探测本地出口 IP)不一致,`summary_exclude` 无法按 IP 过滤 CONNECT 事件,导致 `vsftp_client_connections_total` 被探测污染(每次探测 +1)。这是日志信息不足导致的固有限制,非代码缺陷;需部署侧排除 exporter 自身 IP 才能完全消除。 |
 | KNOWN-007 | `vsftp_user_connections_total` 与 `vsftp_user_logins_total` 在 OK LOGIN 分支同步递增(BUG-006 修复后遗留),两者永远相等,无独立统计意义。仪表盘仅使用 `vsftp_user_logins_total`。保留该指标仅为向后兼容。 |
+| KNOWN-008 | `/health` 在首次探测完成前(`lastProbe.checkTime` 为零值)返回 HTTP 200 healthy。BUG-049 修复后首次探测最迟 10s 内完成,故该"未探测即健康"窗口通常短暂可接受;但在监控协程因其他原因长时间未运行探测时,`/health` 可能误报健康。 |
+| KNOWN-009 | 日志尾部存在"永久半行"(永不出现换行、如进程崩溃/外部截断残留)时,`readLocalFile`/`readRemoteFile` 每次读到该半行都会 break 且不推进 position,若其后有新行追加则永远读不到,静默丢失后续事件。正常条件下的尾部半行随后会补全(BUG-009/028 已处理),永久半行属异常残留;修复需跨轮次状态机(连续 N 轮不补全即强制消费),当前作为已知限制记录。 |
+| KNOWN-010 | `cmd/ssh.go` `GetClient` 在持有 `m.mu` 锁期间执行 `m.client.NewSession()` 做存活探测,该网络 I/O 无 deadline;若 SSH 连接"半死"(TCP 收包但不响应),`NewSession` 无限阻塞并持锁不放,导致关停时 `Close` 等锁挂死。正常监控(单协程、SSH 响应正常)不受影响;修复需重构锁模型或给会话探测加超时,作为已知限制。 |
+| KNOWN-011 | 高基数标签无界增长:`vsftp_client_connections_total`/`vsftp_client_files_total`(标签 `client_ip`/`client_ip,direction`)、`vsftp_user_logins_total`/`vsftp_user_connections_total`(标签 `username`,取自 vsftpd 日志未校验)、`vsftp_files_by_type_total`(标签 `file_type`,见 KNOWN-012)。这些 CounterVec 系列一经创建永不删除,基数随"历史见过"的客户端 IP/用户名/后缀单调增长(每 IP 最多 3 条系列;1 万 IP→3 万系列,10 万 IP→30 万系列,Prometheus 内存数百 MB + 每次抓取文本数十 MB)。公网部署长期运行(含扫描/僵尸网络)风险显著;单主机/内网部署基数小。要根治需改为"活跃集 Gauge + 无活动删除"或前缀聚合,涉及指标语义变更;当前保留 counter 语义,部署侧可用 `metric_relabel_configs` drop 或 recording rule 缓解(注意不降低摄入)。 |
+| KNOWN-012 | `vsftp_files_by_type_total` 的 `file_type` 标签取文件最后一段后缀,常规几十~几百种;但攻击者上传随机后缀(如 `x.a1b2c3`)可制造新系列,理论上也是无界标签。建议上限合并到 `other` 或白名单,当前作为已知限制。 |
+| KNOWN-013 | 本地模式环境变量展开(BUG-048)基于 `os.ExpandEnv` 单次展开:`$VAR` 贪婪匹配,`$HOMExferlog` 会被当整体未定义变量而变空;字面 `$$` 会被吞成空。已建议用户用 `${VAR}` 分隔形式,并在 README 的 `Xferlog_file_path` 说明中写明。 |
+| KNOWN-014 | `deploy/prometheus.yml.example` 的 vsftp-exporter job target、README 配置示例、`grafana-dashboard.json` 的 instance 变量默认值若不一致(job 用 `vsftp-exporter:9101`、其余用 `localhost:9101`),首次打开 dashboard 时 instance 默认选中会无数据片刻。已统一为 `localhost:9101`。 |
+| KNOWN-015 | `deploy/vsftpd-exporter.service` 的 `ExecStart` 原先指向自包含的 `/usr/local/vsftp-exporter/...` 布局,与 `make install`(装到 `/usr/local/bin/`)及 README systemd 示例(`/usr/local/bin/vsftp-exporter -config=/etc/vsftp-exporter/config.json`)不一致。已统一为与 README/Makefile 一致的布局。 |
+| KNOWN-016 | `vsftp_files_by_type_total` 冷启动标签的"0 暴露→提交增量"时序在**并发/慢抓取**下存在理论窗口:`pendingTypeSeq[key] < scrapeSeq` 的提交由"哪个 /metrics 抓取先完成"驱动,而非"哪个抓取实际看到了该标签的 0 采样"(`parsers.go:312`);若某快照早于标签注册、却先完成 bump,则该标签首个增量可能在真实 0 采样被任何抓取输出前就提交,`increase()` 低记一次(经典 counter hole)。单写者 check goroutine + 正常单个 Prometheus 串行抓取下极难触发(μs 级窗口);非崩溃、counter 仍单调。属设计权衡,要彻底消除需为每个 pending 标签记录"是否已被某次抓取输出过"而非仅比较 seq。 |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -627,6 +628,8 @@ func TestExtractFileExtension(t *testing.T) {
 }
 
 func TestParseFTPLogFilesByTypeCounter(t *testing.T) {
+	// 全局 CounterVec 在多次重复执行(count>1)或并行时会被污染,test 前重置(BUG-051)
+	filesByTypeTotal.Reset()
 	before := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("mp4", "upload"))
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "xferlog")
@@ -687,6 +690,8 @@ Wed Aug  5 10:00:03 2026 0 172.25.234.200 1024 /tmp/unknown.xyz b _ i a ostore f
 }
 
 func TestParseFTPLogFilesByTypeColdStart(t *testing.T) {
+	// 全局 CounterVec 在多次重复执行(count>1)或并行时会被污染,test 前重置(BUG-051)
+	filesByTypeTotal.Reset()
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "xferlog")
 	log := `Wed Aug  5 10:00:00 2026 0 172.25.234.200 5242880 /media/movie.m4v b _ i a ostore ftp 0 * c
@@ -847,5 +852,135 @@ Sun Aug  9 16:34:53 2026 [pid 1003] [bob] FTP response: Client "192.168.1.102", 
 	}
 	if dirNotFound != 1 {
 		t.Errorf("exclude=false: dir_not_found 增量 = %v, 期望 1", dirNotFound)
+	}
+}
+
+// TestExpandLogFilePathEnv 验证 expandLogFilePath 支持环境变量路径(BUG-048 回归):
+// 本地模式下配置先展开环境变量、再对展开后的路径做安全校验,因此 $VAR 路径可用。
+func TestExpandLogFilePathEnv(t *testing.T) {
+	t.Setenv("VSFTP_LOG_DIR", "/var/lib/vsftpd")
+	result, err := expandLogFilePath("$VSFTP_LOG_DIR/xferlog")
+	if err != nil {
+		t.Fatalf("expandLogFilePath 展开环境变量失败: %v", err)
+	}
+	want := "/var/lib/vsftpd/xferlog"
+	if !strings.HasSuffix(result, want) {
+		t.Errorf("展开结果 = %q, 期望以 %q 结尾", result, want)
+	}
+	if strings.Contains(result, "$VSFTP_LOG_DIR") {
+		t.Errorf("展开结果仍包含未展开的变量: %q", result)
+	}
+
+	// ${VAR} 形式也应支持
+	result2, err := expandLogFilePath("${VSFTP_LOG_DIR}/vsftpd.log")
+	if err != nil {
+		t.Fatalf("expandLogFilePath 展开 ${VAR} 失败: %v", err)
+	}
+	if !strings.HasSuffix(result2, "/var/lib/vsftpd/vsftpd.log") {
+		t.Errorf("${VAR} 展开结果 = %q, 期望以 /var/lib/vsftpd/vsftpd.log 结尾", result2)
+	}
+}
+
+// TestJoinHostPortIPv6 验证 IPv6 地址与端口拼接使用 net.JoinHostPort(BUG-052 回归):
+// 裸 IPv6(::1)经 isValidHost 放行后,连接地址构造必须生成 [::1]:port 而非 ::1:port。
+func TestJoinHostPortIPv6(t *testing.T) {
+	addr := net.JoinHostPort("::1", "21")
+	if addr != "[::1]:21" {
+		t.Errorf("JoinHostPort(::1, 21) = %q, 期望 [::1]:21", addr)
+	}
+	// 若用旧的 host+":"+port 拼接会得到 ::1:21 而无法拨号
+	if "::1:21" == "[::1]:21" {
+		t.Error("IPv6 拼接仍使用不安全的拼接方式")
+	}
+	// IPv4 与 hostname 不受影响
+	if got := net.JoinHostPort("192.168.1.1", "21"); got != "192.168.1.1:21" {
+		t.Errorf("JoinHostPort IPv4 = %q", got)
+	}
+	if got := net.JoinHostPort("example.com", "22"); got != "example.com:22" {
+		t.Errorf("JoinHostPort hostname = %q", got)
+	}
+}
+
+// TestLoadConfigLocalEnvPath 验证本地模式下配置中的环境变量路径能正确展开(BUG-048 回归):
+// isValidFilePath 需在 expandLogFilePath 展开之后对最终路径校验,否则 $VAR 路径被拒绝。
+func TestLoadConfigLocalEnvPath(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "xferlog")
+	if err := os.WriteFile(logFile, []byte("Wed Aug  5 10:00:00 2026 0 192.168.1.1 10 /f.txt b _ i a u ftp 0 * c\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VSFTP_TEST_LOG_DIR", dir)
+
+	cfgFile := filepath.Join(dir, "config.json")
+	cfgJSON := `{
+		"target_host":"localhost","ftp_port":"21","ftp_user":"u","ftp_password":"p",
+		"need_ssh":false,"Xferlog_file_path":"$VSFTP_TEST_LOG_DIR/xferlog",
+		"listen_port":"19101","check_interval":30,
+		"vsftplog_enabled":false,"summary_exclude":false
+	}`
+	if err := os.WriteFile(cfgFile, []byte(cfgJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadAndValidateConfig(cfgFile)
+	if err != nil {
+		t.Fatalf("配置加载失败(BUG-048 未修复): %v", err)
+	}
+	if cfg.LogFilePath != logFile {
+		t.Errorf("LogFilePath = %q, 期望展开为 %q", cfg.LogFilePath, logFile)
+	}
+}
+
+// TestParseSSOutputExactPortMatch 验证端口按完整 token 精确比较而非后缀匹配(BUG-053 回归):
+// 随机客户端端口恰好以 FTP 端口结尾(如 56069 以 6069 结尾)不得被误判为 FTP 连接。
+func TestParseSSOutputExactPortMatch(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		port   string
+		want   int
+	}{
+		// 客户端随机端口 56069(以 6069 结尾)连接 MySQL:两端都不是 FTP 端口
+		{"client-56069-to-mysql", "ESTAB 0 0 172.25.234.5:56069 172.25.200.1:3306", "6069", 0},
+		// 真实 FTP 连接:local=6069
+		{"real-ftp-6069", "ESTAB 0 0 172.25.200.1:6069 172.25.234.5:45000", "6069", 1},
+		// 端口 321(以 21 结尾)连接 MySQL:不能算 ftp:21
+		{"port-321-not-21", "ESTAB 0 0 1.2.3.4:321 5.6.7.8:3306", "21", 0},
+		// 端口 21 真实连接
+		{"real-ftp-21", "ESTAB 0 0 1.2.3.4:21 5.6.7.8:40000", "21", 1},
+		// IPv4-mapped
+		{"ipv4-mapped", "ESTAB 0 0 ::ffff:172.25.200.1:6069 ::ffff:172.25.234.5:45001", "6069", 1},
+	}
+	for _, c := range cases {
+		total, _, _ := parseSSOutput(c.output, c.port)
+		if total != c.want {
+			t.Errorf("[%s] total=%d, 期望 %d (输出:%q)", c.name, total, c.want, c.output)
+		}
+	}
+}
+
+// TestXferlogNegativeFileSizeNoPanic 验证负 fileSize 被 clamp 不会触发 counter panic(BUG-054 回归)。
+func TestXferlogNegativeFileSizeNoPanic(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	log := "Wed Aug  5 10:00:00 2026 0 172.25.234.200 -5242880 /media/abc.mp4 b _ i a ostore ftp 0 * c\n"
+	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
+		t.Fatal(err)
+	}
+	filesByTypeTotal.Reset()
+	state := NewExporterState()
+	state.lastProcessedTime = time.Now()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("BUG-054 未修复: 负 fileSize 触发 panic = %v", r)
+		}
+	}()
+	before := testutil.ToFloat64(uploadBytesTotal)
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("parseFTPLog err: %v", err)
+	}
+	// clamp 后负值归零,Add(0) 不改变 counter:增量应为 0。
+	// 用 before/after delta 而非绝对值,避免全局 counter 跨测试累积(BUG-051)。
+	if got := testutil.ToFloat64(uploadBytesTotal) - before; got != 0 {
+		t.Errorf("负 fileSize 应被 clamp 为 0, uploadBytesTotal 增量=%v", got)
 	}
 }

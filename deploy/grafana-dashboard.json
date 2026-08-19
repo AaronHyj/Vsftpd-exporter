@@ -854,7 +854,7 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisLabel": "MB/s",
+            "axisLabel": "MiB/s",
             "drawStyle": "line",
             "fillOpacity": 20,
             "gradientMode": "opacity",
@@ -863,7 +863,7 @@
             "showPoints": "never",
             "spanNulls": true
           },
-          "unit": "MBs"
+          "unit": "decmibs"
         }
       },
       "gridPos": {
@@ -899,7 +899,7 @@
           "refId": "B"
         }
       ],
-      "title": "传输速率 (MB/s)",
+      "title": "传输速率 (MiB/s)",
       "type": "timeseries"
     },
     {
