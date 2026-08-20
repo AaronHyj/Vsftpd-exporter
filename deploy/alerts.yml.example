@@ -123,6 +123,61 @@ groups:
           summary: "达到最大连接数限制"
           description: "实例 {{ $labels.instance }} 在过去 5 分钟内出现过达到最大连接数限制的事件"
 
+      # 空闲会话超时频繁告警(idle_session_timeout 触发)
+      - alert: HighIdleTimeoutRate
+        expr: rate(vsftp_idle_timeout_total[5m]) * 60 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "空闲会话超时频繁"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内空闲会话超时率超过 5 次/分钟,可能存在大量僵尸会话或客户端异常"
+
+      # 数据连接超时频繁告警(data_connection_timeout 触发)
+      - alert: HighDataConnTimeoutRate
+        expr: rate(vsftp_data_connection_timeout_total[5m]) * 60 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "数据连接超时频繁"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内数据连接停滞超时率超过 5 次/分钟,可能存在网络故障或带宽瓶颈"
+
+      # 全局连接数上限(max_clients)频繁触发告警
+      - alert: MaxClientsReached
+        expr: rate(vsftp_connection_limit_rejections_total{reason="max_clients"}[5m]) * 60 > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "达到全局最大客户端数"
+          description: "实例 {{ $labels.instance }} 触及全局 max_clients 上限,建议核对 max_clients 配置或扩容"
+
+      # 单IP连接数上限(max_per_ip)频繁触发告警(可能是单源攻击/异常客户端)
+      - alert: MaxPerIpReached
+        expr: rate(vsftp_connection_limit_rejections_total{reason="max_per_ip"}[5m]) * 60 > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "单IP连接数超限"
+          description: "实例 {{ $labels.instance }} 频繁触发 max_per_ip 单IP连接上限,可能来自同一源的异常连接或攻击"
+
+      # PASV 数据连接建立失败频繁告警(pasv_min/max_port 范围耗尽或网络故障)
+      - alert: HighPasvPortFailures
+        expr: rate(vsftp_pasv_port_rejections_total[5m]) * 60 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: vsftpd
+        annotations:
+          summary: "PASV 数据连接建立失败频繁"
+          description: "实例 {{ $labels.instance }} 在过去 5 分钟内 PASV 数据连接建立失败率超过 5 次/分钟,可能 pasv_min/max_port 端口范围耗尽或网络故障"
+
       # Exporter 自身不可用告警
       - alert: VsftpExporterDown
         expr: up{job="vsftp-exporter"} == 0

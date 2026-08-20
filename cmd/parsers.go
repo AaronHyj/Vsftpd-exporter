@@ -506,6 +506,42 @@ func classifyFTPError(code, message string) string {
 	}
 }
 
+// classifyFTPNotice 在 classifyFTPError 之外,A1-A4 细分计数依据。
+// 依据 vsftpd 官方配置文档(vsftpd_conf.html)的 idle_session_timeout、
+// data_connection_timeout、max_clients、max_per_ip、pasv_min/max_port,
+// 从 FTP response(code+message)中识别对应运行时事件。返回命中的分类集合:
+//   - "idle_timeout"   :响应空闲超时(idle_session_timeout 触发)
+//   - "data_conn_timeout":数据传输停滞无进展超时(data_connection_timeout 触发)
+//   - "max_clients"    :达到全局连接上限(max_clients)
+//   - "max_per_ip"     :单 IP 连接数超限(max_per_ip)
+//   - "pasv_port"      :PASV 数据连接建立失败(PASV 端口范围耗尽或网络故障,见 KNOWN)
+//
+// 注意:返回值与 classifyFTPError 的 reason 相互独立,当前 ftpErrorsTotal 的
+// 归类不受影响,保持向后兼容。
+func classifyFTPNotice(code, message string) []string {
+	msg := strings.ToLower(message)
+	var hits []string
+
+	switch {
+	case code == "421" && strings.Contains(msg, "timeout"):
+		hits = append(hits, "idle_timeout")
+	case code == "426" && (strings.Contains(msg, "failure writing network stream") ||
+		strings.Contains(msg, "transfer aborted")):
+		hits = append(hits, "data_conn_timeout")
+	case strings.Contains(msg, "maximum number of clients") || strings.Contains(msg, "too many clients"):
+		// max_clients:全局连接数上限
+		hits = append(hits, "max_clients")
+	case strings.Contains(msg, "from your internet address") || strings.Contains(msg, "from your ip"):
+		// max_per_ip:单 IP 连接数上限
+		hits = append(hits, "max_per_ip")
+	case code == "425" && (strings.Contains(msg, "establish connection") ||
+		strings.Contains(msg, "data connection")):
+		hits = append(hits, "pasv_port")
+	}
+
+	return hits
+}
+
 func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr *SSHManager) error {
 	if logPath == "" {
 		return nil
@@ -735,6 +771,23 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				}
 				if reason == "max_connections" {
 					maxConnectionsReachedTotal.Inc()
+				}
+
+				// A1-A4 细分计数:idle_session_timeout / data_connection_timeout /
+				// max_clients / max_per_ip / PASV 端口失败(不改变 classifyFTPError 归类)
+				for _, notice := range classifyFTPNotice(code, message) {
+					switch notice {
+					case "idle_timeout":
+						vsftpIdleTimeoutTotal.Inc()
+					case "data_conn_timeout":
+						vsftpDataConnTimeoutTotal.Inc()
+					case "max_clients":
+						vsftpConnLimitRejectedTotal.WithLabelValues("max_clients").Inc()
+					case "max_per_ip":
+						vsftpConnLimitRejectedTotal.WithLabelValues("max_per_ip").Inc()
+					case "pasv_port":
+						vsftpPasvPortRejectionsTotal.Inc()
+					}
 				}
 				continue
 			}

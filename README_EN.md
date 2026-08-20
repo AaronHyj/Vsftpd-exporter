@@ -306,6 +306,10 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_authentication_errors_total` | Counter | - | Total authentication errors (530 responses only; FAIL LOGIN is no longer double-counted) |
 | `vsftp_max_connections_reached_total` | Counter | - | Times the max-connections limit was reached |
 | `vsftp_ftp_errors_total` | Counter | `reason` | FTP protocol errors counted by reason; see table below |
+| `vsftp_idle_timeout_total` | Counter | - | Number of idle session timeouts (idle_session_timeout, 421 Timeout) |
+| `vsftp_data_connection_timeout_total` | Counter | - | Number of data connection timeouts (data_connection_timeout, 426) |
+| `vsftp_connection_limit_rejections_total` | Counter | `reason` | Number of connection limit rejections; `reason` is `max_clients` (global) or `max_per_ip` (per-IP) |
+| `vsftp_pasv_port_rejections_total` | Counter | - | Number of PASV data connection establishment failures (pasv_min/max_port range exhausted or network) |
 
 Possible `reason` label values for `vsftp_ftp_errors_total`:
 
@@ -380,6 +384,11 @@ scrape_configs:
 | HighBandwidthUsage | info | Bandwidth > 100 MiB/s (104857600 B/s) |
 | HighFTPErrorRate | warning | FTP protocol error rate > 5/min over 5 minutes (all reasons combined) |
 | MaxConnectionsReached | warning | Max-connections limit reached |
+| HighIdleTimeoutRate | warning | Idle session timeout rate too high (>5/min) |
+| HighDataConnTimeoutRate | warning | Data connection timeout rate too high (>5/min) |
+| MaxClientsReached | warning | Global max_clients limit reached |
+| MaxPerIpReached | warning | Per-IP connection limit (max_per_ip) reached |
+| HighPasvPortFailures | warning | PASV data connection establishment failure rate too high (>5/min) |
 | VsftpExporterDown | critical | Exporter itself unavailable for more than 2 minutes |
 
 Enable alert rules by uncommenting `rule_files` in `prometheus.yml`:

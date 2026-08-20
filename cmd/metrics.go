@@ -89,6 +89,30 @@ var (
 		Help: "Total number of times max connections limit was reached.",
 	})
 
+	// A1: idle_session_timeout 触发(421 Timeout)
+	vsftpIdleTimeoutTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vsftp_idle_timeout_total",
+		Help: "Total number of idle session timeouts (idle_session_timeout).",
+	})
+
+	// A2: data_connection_timeout 触发(426,传输停滞无进展被踢)
+	vsftpDataConnTimeoutTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vsftp_data_connection_timeout_total",
+		Help: "Total number of data connection timeouts (data_connection_timeout).",
+	})
+
+	// A3: 连接数限制拒绝,按限制类型拆分(max_clients 全局 / max_per_ip 单IP)
+	vsftpConnLimitRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vsftp_connection_limit_rejections_total",
+		Help: "Total number of connection limit rejections by limit type.",
+	}, []string{"reason"})
+
+	// A4: PASV 数据连接建立失败(端口范围耗尽是主因之一,见 KNOWN 说明)
+	vsftpPasvPortRejectionsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vsftp_pasv_port_rejections_total",
+		Help: "Total number of PASV data connection establishment failures (pasv_min/max_port outage or network).",
+	})
+
 	ftpErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "vsftp_ftp_errors_total",
 		Help: "Total number of FTP protocol errors by reason.",
@@ -176,5 +200,9 @@ func init() {
 		activeProcesses,
 		clientFilesTotal,
 		filesByTypeTotal,
+		vsftpIdleTimeoutTotal,
+		vsftpDataConnTimeoutTotal,
+		vsftpConnLimitRejectedTotal,
+		vsftpPasvPortRejectionsTotal,
 	)
 }

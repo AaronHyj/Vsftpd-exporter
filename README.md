@@ -306,6 +306,10 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_authentication_errors_total` | Counter | - | 认证错误总次数（仅统计 530 响应，已去除 FAIL LOGIN 重复计数） |
 | `vsftp_max_connections_reached_total` | Counter | - | 达到最大连接数限制次数 |
 | `vsftp_ftp_errors_total` | Counter | `reason` | FTP 协议错误按原因分类计数，`reason` 取值见下表 |
+| `vsftp_idle_timeout_total` | Counter | - | 空闲会话超时次数(idle_session_timeout 触发,421 Timeout) |
+| `vsftp_data_connection_timeout_total` | Counter | - | 数据连接停滞超时次数(data_connection_timeout 触发,426) |
+| `vsftp_connection_limit_rejections_total` | Counter | `reason` | 达到连接数限制被拒绝次数,`reason` 取值 `max_clients`(全局)/`max_per_ip`(单IP) |
+| `vsftp_pasv_port_rejections_total` | Counter | - | PASV 数据连接建立失败次数(pasv_min/max_port 范围耗尽或网络故障) |
 
 `vsftp_ftp_errors_total` 的 `reason` 标签取值：
 
@@ -380,6 +384,11 @@ scrape_configs:
 | HighBandwidthUsage | info | 带宽 > 100 MiB/s (104857600 B/s) |
 | HighFTPErrorRate | warning | 5 分钟内 FTP 协议错误率 > 5 次/分钟(全部原因合计) |
 | MaxConnectionsReached | warning | 达到最大连接数限制 |
+| HighIdleTimeoutRate | warning | 空闲会话超时率过高(>5 次/分钟) |
+| HighDataConnTimeoutRate | warning | 数据连接超时率过高(>5 次/分钟) |
+| MaxClientsReached | warning | 触及全局 max_clients 上限 |
+| MaxPerIpReached | warning | 触及单 IP 连接数上限(max_per_ip) |
+| HighPasvPortFailures | warning | PASV 数据连接建立失败率过高(>5 次/分钟) |
 | VsftpExporterDown | critical | Exporter 自身不可用超过 2 分钟 |
 
 启用告警规则：在 `prometheus.yml` 中取消 `rule_files` 的注释：

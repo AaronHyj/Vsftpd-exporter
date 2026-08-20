@@ -4,7 +4,7 @@
 
 ## 审查信息
 
-- 审查日期:2026-08-08(第一轮)/ 2026-08-08(第二轮)/ 2026-08-09(第三轮深度审查与修复)/ 2026-08-12(第四轮全面审查与修复)/ 2026-08-12(第五轮复查:连接数监听套接字污染、FTP握手超时计数、README 告警文档同步)/ 2026-08-12(第六轮复查:README 桶范围错误、FTP response 正则捕获用户名、NAT CONNECT 过滤限制)/ 2026-08-12(第七至十轮深度复查:并发安全、PromQL 语义、过滤条件优先级、四方一致性、冗余指标、测试隔离)/ 2026-08-19(第十一至十二轮专项复核:SSH 存活探测并发锁、FTP 握手 deadline 设置、连接数端口后缀误匹配、负 fileSize counter panic、README 指标来源与安全警示、告警名拼写)/ 2026-08-19(第十三轮:HTTP 服务与指标语义、PromQL 与单位一致性、运行时冒烟测试)/ 2026-08-20(第十四轮:配置校验边界、ss 去重逻辑、go 模块一致性、Makefile .PHONY)
+- 审查日期:2026-08-08(第一轮)/ 2026-08-08(第二轮)/ 2026-08-09(第三轮深度审查与修复)/ 2026-08-12(第四轮全面审查与修复)/ 2026-08-12(第五轮复查:连接数监听套接字污染、FTP握手超时计数、README 告警文档同步)/ 2026-08-12(第六轮复查:README 桶范围错误、FTP response 正则捕获用户名、NAT CONNECT 过滤限制)/ 2026-08-12(第七至十轮深度复查:并发安全、PromQL 语义、过滤条件优先级、四方一致性、冗余指标、测试隔离)/ 2026-08-19(第十一至十二轮专项复核:SSH 存活探测并发锁、FTP 握手 deadline 设置、连接数端口后缀误匹配、负 fileSize counter panic、README 指标来源与安全警示、告警名拼写)/ 2026-08-19(第十三轮:HTTP 服务与指标语义、PromQL 与单位一致性、运行时冒烟测试)/ 2026-08-20(第十四轮:配置校验边界、ss 去重逻辑、go 模块一致性、Makefile .PHONY)/ 2026-08-20(第十五轮:基于 vsftpd_conf.html 新增 A1-A4 连接限制/超时/ PASV 细分监控与告警/面板/文档)
 - 审查范围:`cmd/` 全部源码(main.go / config.go / metrics.go / ssh.go / parsers.go / tests)、Makefile、`deploy/grafana-dashboard.json`、`deploy/alerts.yml.example`、`docs/bugrecord.md`、`README.md`
 - 审查重点:仪表盘指标覆盖完整性、告警规则聚合正确性、summary_exclude 遗漏、活跃度指标静默期衰减、带宽告警改用 PromQL rate、仪表盘新增面板、连接数指标误计监听套接字、FTP 握手超时计数、README 与告警规则一致性、README 桶范围描述错误、FTP response 正则捕获用户名增强、NAT CONNECT 过滤限制
 - 验证命令:`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -v -race ./...`、`python3 -c "import json; json.load(open('deploy/grafana-dashboard.json'))"`
@@ -74,6 +74,8 @@
 | BUG-059 | 中 | `README.md`、`README_EN.md` | 指标文档小节与表格损坏:带标签指标(`vsftp_client_files_total`/`vsftp_files_by_type_total`/登录指标)被拆分到 3 列表(传输统计)与 4 列表(客户端统计)之间,来源标注与文档列数不一致、`vsftp_client_files_total` 一度丢失;且 `Xferlog_file_path` 的"支持环境变量"未说明仅限本地模式 | 已修复 |
 | BUG-060 | 中 | `README.md`、`README_EN.md`、`deploy/grafana-dashboard.json` | 查询示例与单位标注不一致:`vsftp_transfer_errors_total` 的 `type` 文档写 "(upload/download/timeout)" 但代码只产 upload/download(timeout 永不产生,`type="timeout"` 查询恒空);"每分钟"的 `rate()` 未乘 60(rate 实际是次/秒,注释与数值口径不符);带宽换算 `/1024/1024`(MiB) 却标注/渲染为 MB/s(dashboard 面板14 unit=MBs + 标题,README 注释),显示偏差约 4.6% | 已修复 |
 | BUG-061 | 低 | `Makefile` | `.PHONY` 声明不全: `all`、`coverage`、`tidy`、`build-all`、`build-linux`、`build-windows`、`build-darwin` 未在 `.PHONY` 中声明。GNU make 默认把这些目标视为文件名(若存在同名文件则跳过 recipe),虽当前无同名文件无害,但重构时可能产生意外跳过。 | 已修复 |
+| BUG-062 | 中 | `cmd/metrics.go` / `cmd/parsers.go` | 依据 vsftpd_conf.html 新增 A1-A4 细分监控:`vsftp_idle_timeout_total`(idle_session_timeout)、`vsftp_data_connection_timeout_total`(data_connection_timeout)、`vsftp_connection_limit_rejections_total{reason=max_clients|max_per_ip}`、`vsftp_pasv_port_rejections_total`;并新增 5 条告警、Grafana 面板与文档(英文 "A5" ASCII 未做,由用户权衡后跳过) | 已完成 |
+| BUG-063 | 低 | `cmd/vsftp-exporter_test.go` | BUG-062 新增测试在文件末尾追加时多出一个空行,`gofmt -l` 报格式不符(gofmt:多个函数间仅应有一个空行)。 | 已修复 |
 
 ## 详细说明
 
@@ -623,6 +625,46 @@ GNU make 默认将未声明为 `.PHONY` 的目标视为文件名目标:若存在
 当前不存在同名文件,实际无害,但重构或创建同名文件时可能产生意外跳过。
 
 **修复**:在 `.PHONY` 行补全所有 target。
+
+
+### BUG-062:基于 vsftpd_conf.html 新增连接限制/超时细分监控(A1-A4)(中)
+
+**背景**:对照 vsftpd 官方配置文档(vsftpd_conf.html),原有 TS(错误与异常)面板把 idle 超时、数据连接超时、
+max_clients / max_per_ip 连接上限、PASV 端口失败等事件一律并入 `ftp_errors_total{reason=...}`,
+无法单独观测 4xx/5xx 响应所对应的 vsftpd 配置项运行时事件。本次按文档新增四类细分指标:
+
+| 新指标 | 对应配置项 | 匹配依据(FTP response) |
+|--------|-----------|------------------------|
+| `vsftp_idle_timeout_total` | `idle_session_timeout` | `421` + 消息含 `timeout` |
+| `vsftp_data_connection_timeout_total` | `data_connection_timeout` | `426` + 消息含 `failure writing network stream` / `transfer aborted` |
+| `vsftp_connection_limit_rejections_total{reason=max_clients}` | `max_clients` | 消息含 `maximum number of clients` / `too many clients` |
+| `vsftp_connection_limit_rejections_total{reason=max_per_ip}` | `max_per_ip` | 消息含 `from your internet address` / `from your ip` |
+| `vsftp_pasv_port_rejections_total` | `pasv_min/max_port` | `425` + 消息含 `establish connection` / `data connection` |
+
+**实现**:在 `parsers.go` 新增 `classifyFTPNotice(code, message) []string`,于 FTP response 处理段并行计数,
+**不改变**原有 `classifyFTPError` 的 `ftpErrorsTotal` 归类,保持向后兼容。新指标在 `metrics.go` 注册。
+
+**配套**:`deploy/alerts.yml.example` 新增 5 条告警(HighIdleTimeoutRate / HighDataConnTimeoutRate /
+MaxClientsReached / MaxPerIpReached / HighPasvPortFailures);`deploy/grafana-dashboard.json` 新增
+"🔒 连接限制与超时" 区块(5 个 stat + 1 个 rate timeseries,in waiting 已有面板位移);README 中英文更新指标与告警表。
+
+**验证**:新增 `TestClassifyFTPNotice`(12 案例)与 `TestParseVsftpdLogA1A4Counters`(端到端 5 计数)。
+`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -race -count=1 ./cmd`、JSON/YAML 校验全部通过。
+
+**说明**:A5(ASCII 模式传输计数,源自 `transfer_type` 字段)在用户权衡后未实现——xferlog 已有上传/下载计数;
+ASCII 仅表示文本/二进制模式差异,监控 ROI 低,详见对话记录。
+
+
+
+### BUG-063:测试文件多余空行(gofmt 报格式不符)(低)
+
+**位置**:`cmd/vsftp-exporter_test.go` 文件末尾追加的 A1-A4 测试块前。
+
+**问题**:在文件末尾追加测试时,`TestClassifyFTPNotice` 前多余了一个空行(多个顶层函数之间
+按 gofmt 规范应只有一个空行),`gofmt -l` 将该文件标记为格式不符。不影响编译与测试,但违反 gofmt。
+
+**修复**:`gofmt -w cmd/vsftp-exporter_test.go` 移除多余空行。
+
 ## 已知特性说明
 
 | 编号 | 说明 |
@@ -642,3 +684,5 @@ GNU make 默认将未声明为 `.PHONY` 的目标视为文件名目标:若存在
 | KNOWN-014 | `deploy/prometheus.yml.example` 的 vsftp-exporter job target、README 配置示例、`grafana-dashboard.json` 的 instance 变量默认值若不一致(job 用 `vsftp-exporter:9101`、其余用 `localhost:9101`),首次打开 dashboard 时 instance 默认选中会无数据片刻。已统一为 `localhost:9101`。 |
 | KNOWN-015 | `deploy/vsftpd-exporter.service` 的 `ExecStart` 原先指向自包含的 `/usr/local/vsftp-exporter/...` 布局,与 `make install`(装到 `/usr/local/bin/`)及 README systemd 示例(`/usr/local/bin/vsftp-exporter -config=/etc/vsftp-exporter/config.json`)不一致。已统一为与 README/Makefile 一致的布局。 |
 | KNOWN-016 | `vsftp_files_by_type_total` 冷启动标签的"0 暴露→提交增量"时序在**并发/慢抓取**下存在理论窗口:`pendingTypeSeq[key] < scrapeSeq` 的提交由"哪个 /metrics 抓取先完成"驱动,而非"哪个抓取实际看到了该标签的 0 采样"(`parsers.go:312`);若某快照早于标签注册、却先完成 bump,则该标签首个增量可能在真实 0 采样被任何抓取输出前就提交,`increase()` 低记一次(经典 counter hole)。单写者 check goroutine + 正常单个 Prometheus 串行抓取下极难触发(μs 级窗口);非崩溃、counter 仍单调。属设计权衡,要彻底消除需为每个 pending 标签记录"是否已被某次抓取输出过"而非仅比较 seq。 |
+| KNOWN-017 | `vsftp_pasv_port_rejections_total`(A4)基于 `425` FTP response 消息匹配,而 `425` 无 "pasv 端口" 专属字样,无法在日志层面与普通 425 数据连接建立失败(网络/防火墙)完全区分;统计的是"PASV/数据连接建立失败"总数,端口范围耗尽是主因之一但非唯一。当作数据连接建立失败的监控信号,而非精确的端口耗尽计数。 |
+| KNOWN-018 | `vsftp_idle_timeout_total`(A1)匹配 `421` + 消息含 `timeout`;vsftpd 的 `idle_session_timeout` 触发时通常报 `421 Timeout.`,消息含 "timeout" 判据可靠。极少数自定义 banner 或非标准响应若也在 421 里含 "timeout" 字样会被计入,实际冲突概率极低。 |

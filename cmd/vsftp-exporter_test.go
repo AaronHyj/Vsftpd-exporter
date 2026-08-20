@@ -984,3 +984,83 @@ func TestXferlogNegativeFileSizeNoPanic(t *testing.T) {
 		t.Errorf("负 fileSize 应被 clamp 为 0, uploadBytesTotal 增量=%v", got)
 	}
 }
+
+func TestClassifyFTPNotice(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		message string
+		want    []string
+	}{
+		{"421 空闲超时", "421", "Timeout. (responded KIA aka kill idle)", []string{"idle_timeout"}},
+		{"421 非超时的服务不可用", "421", "Service not available, closing control connection.", nil},
+		{"426 上传流停滞", "426", "Failure writing network stream.", []string{"data_conn_timeout"}},
+		{"426 传输中止", "426", "Connection closed; transfer aborted.", []string{"data_conn_timeout"}},
+		{"530 全局客户端上限", "530", "Maximum number of clients (30) reached.", []string{"max_clients"}},
+		{"530 连接数过多", "530", "Too many clients.", []string{"max_clients"}},
+		{"421 单IP连接数超限", "421", "There are too many connections from your internet address.", []string{"max_per_ip"}},
+		{"530 单IP连接数超限", "530", "Sorry, there are too many connections from your internet address.", []string{"max_per_ip"}},
+		{"425 建立连接失败(PASV)", "425", "Failed to establish connection.", []string{"pasv_port"}},
+		{"425 数据连接打不开", "425", "Can't open data connection.", []string{"pasv_port"}},
+		{"530 登录错误", "530", "Login incorrect.", nil},
+		{"550 目录不存在", "550", "Failed to change directory.", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyFTPNotice(tt.code, tt.message)
+			if len(got) != len(tt.want) {
+				t.Errorf("classifyFTPNotice(%q, %q) = %v, 期望 %v", tt.code, tt.message, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("classifyFTPNotice(%q, %q) = %v, 期望 %v", tt.code, tt.message, got, tt.want)
+					return
+				}
+			}
+		})
+	}
+}
+
+func TestParseVsftpdLogA1A4Counters(t *testing.T) {
+	beforeIdle := testutil.ToFloat64(vsftpIdleTimeoutTotal)
+	beforeData := testutil.ToFloat64(vsftpDataConnTimeoutTotal)
+	beforeMaxClients := testutil.ToFloat64(vsftpConnLimitRejectedTotal.WithLabelValues("max_clients"))
+	beforeMaxPerIP := testutil.ToFloat64(vsftpConnLimitRejectedTotal.WithLabelValues("max_per_ip"))
+	beforePasv := testutil.ToFloat64(vsftpPasvPortRejectionsTotal)
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "vsftpd.log")
+	log := `Sun Aug  9 16:34:50 2026 [pid 1234] [u1] FTP response: Client "192.168.1.100", "421 Timeout. (responded KIA aka kill idle)"
+Sun Aug  9 16:34:51 2026 [pid 1235] [u2] FTP response: Client "192.168.1.101", "426 Failure writing network stream."
+Sun Aug  9 16:34:52 2026 [pid 1236] [] FTP response: Client "192.168.1.102", "530 Maximum number of clients (30) reached."
+Sun Aug  9 16:34:53 2026 [pid 1237] [] FTP response: Client "192.168.1.103", "421 There are too many connections from your internet address."
+Sun Aug  9 16:34:54 2026 [pid 1238] [u3] FTP response: Client "192.168.1.104", "425 Failed to establish connection."
+Sun Aug  9 16:34:55 2026 [pid 1239] [u4] FTP response: Client "192.168.1.105", "530 Login incorrect."
+`
+	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	state := NewExporterState()
+	if err := parseVsftpdLog(&Config{}, path, state, nil); err != nil {
+		t.Fatalf("parseVsftpdLog 失败: %v", err)
+	}
+
+	if got := testutil.ToFloat64(vsftpIdleTimeoutTotal) - beforeIdle; got != 1 {
+		t.Errorf("vsftpIdleTimeoutTotal 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(vsftpDataConnTimeoutTotal) - beforeData; got != 1 {
+		t.Errorf("vsftpDataConnTimeoutTotal 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(vsftpConnLimitRejectedTotal.WithLabelValues("max_clients")) - beforeMaxClients; got != 1 {
+		t.Errorf("connection_limit_rejections{max_clients} 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(vsftpConnLimitRejectedTotal.WithLabelValues("max_per_ip")) - beforeMaxPerIP; got != 1 {
+		t.Errorf("connection_limit_rejections{max_per_ip} 增量 = %v, 期望 1", got)
+	}
+	if got := testutil.ToFloat64(vsftpPasvPortRejectionsTotal) - beforePasv; got != 1 {
+		t.Errorf("vsftpPasvPortRejectionsTotal 增量 = %v, 期望 1", got)
+	}
+}
