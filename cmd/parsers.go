@@ -285,8 +285,33 @@ func extractFileExtension(filePath string) string {
 	return ext
 }
 
-// recordTypeEvent 记录一次按后缀和方向的文件传输。已提交的标签直接 Inc()；
-// 首次见到的标签先用 Add(0) 注册 0 值系列并暂存计数，待抓取到 0 采样后再提交，
+// isNoiseTransfer 判断文件传输是否为 vsftpd 内部/遍历产生的噪音文件,此类
+// 文件不应计入 files_by_type_total / client_files_total(否则会被目录列表缓存、
+// 上传临时文件大量污染后缀统计)。当前识别两类:
+//   - .listing  :vsftpd 目录列表缓存文件(客户端遍历目录时代 vsftpd 读写)
+//   - *.writing :vsftpd 上传临时文件(写完才改名为正式文件名)
+//
+// 仅按精确文件名后缀匹配,避免误伤真实的隐藏文件(如 .config)或含后缀名的业务文件(如 .listing.bak)。
+// 仅排除后缀/客户端文件统计,不影响 upload/download/bytes 等真实传输计数。
+func isNoiseTransfer(filePath string) bool {
+	base := filepath.Base(filePath)
+	if strings.HasSuffix(base, ".writing") {
+		return true
+	}
+	return strings.HasSuffix(base, ".listing")
+}
+
+// normalizeClientIP 统一来源 IP 的字符串表示,消除 IPv4-mapped IPv6 与纯 IPv4 之间的差异。
+// vsftpd 在 listen_ipv6 开启时会把 IPv4 来源地址记成 "::ffff:a.b.c.d",而 exporter 探测
+// 连接的本地出口 IP 经 conn.LocalAddr() 得到的是纯 "a.b.c.d",若直接字符串比较则恒不相等,
+// 导致基于 probeClientIP 的 summary_exclude 对 CONNECT/FTP response 等事件过滤失效,
+// 探测自身被误计(src/rapid_reconnections)。归一化后再比较即可匹配。
+func normalizeClientIP(ip string) string {
+	return strings.TrimPrefix(ip, "::ffff:")
+}
+
+// recordTypeEvent 记录一次按后缀和方向的文件传输。已提交的标签直接 Inc();
+// 首次见到的标签先用 Add(0) 注册 0 值系列并暂存计数,待抓取到 0 采样后再提交,
 // 使 increase()[$__range] 能观测到该标签的首次增量。
 func (s *ExporterState) recordTypeEvent(fileType, direction string) {
 	key := fileType + "\x00" + direction
@@ -421,11 +446,15 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 
 			totalBytesThisRound += fileSize
 
-			if clientIP != "" {
-				clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
+			// .listing / *.writing 等 vsftpd 内部/临时文件不计入后缀与客户端文件统计,
+			// 避免目录列表缓存、上传临时文件大量污染 files_by_type / client_files(见 isNoiseTransfer)。
+			if !isNoiseTransfer(filePath) {
+				if clientIP != "" {
+					clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
+				}
+				ext := extractFileExtension(filePath)
+				state.recordTypeEvent(ext, dirLabel)
 			}
-			ext := extractFileExtension(filePath)
-			state.recordTypeEvent(ext, dirLabel)
 			if transferTime > 0 {
 				transferDurationSeconds.Observe(float64(transferTime))
 			}
@@ -608,7 +637,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				clientIP := matches[3]
 
 				// summary_exclude 开启时，忽略健康检查探测产生的连接
-				if config.SummaryExclude && state.probeClientIP != "" && clientIP == state.probeClientIP {
+				if config.SummaryExclude && state.probeClientIP != "" && normalizeClientIP(clientIP) == normalizeClientIP(state.probeClientIP) {
 					continue
 				}
 
@@ -672,7 +701,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				clientIP := matches[4]
 
 				// summary_exclude 开启时,忽略健康检查探测账号的失败登录
-				if config.SummaryExclude && (state.probeClientIP != "" && clientIP == state.probeClientIP || username == config.FTPUser) {
+				if config.SummaryExclude && (state.probeClientIP != "" && normalizeClientIP(clientIP) == normalizeClientIP(state.probeClientIP) || username == config.FTPUser) {
 					continue
 				}
 
@@ -760,7 +789,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 
 				// summary_exclude 开启时,忽略健康检查探测产生的错误响应:
 				// 按探测来源 IP 或探测账号名过滤(BUG-046,NAT 场景下 IP 可能不一致)
-				if config.SummaryExclude && (state.probeClientIP != "" && matches[4] == state.probeClientIP || matches[3] == config.FTPUser) {
+				if config.SummaryExclude && (state.probeClientIP != "" && normalizeClientIP(matches[4]) == normalizeClientIP(state.probeClientIP) || matches[3] == config.FTPUser) {
 					continue
 				}
 

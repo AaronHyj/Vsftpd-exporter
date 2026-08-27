@@ -340,7 +340,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 | `vsftp_login_total` | Counter | `-` | Total number of FTP logins (source: vsftpd.log) |
 | `vsftp_last_login_time` | Gauge | `-` | Unix timestamp of the last successful login (source: vsftpd.log) |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction (source: xferlog) |
-| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction (source: xferlog); `file_type` is the lowercase extension (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one. A newly seen label is first registered at 0 and its counts committed after the next scrape, so `increase($__range)` can observe the first increment |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction (source: xferlog); `file_type` is the lowercase extension (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one; vsftpd internal/traversal files (`.listing` directory-list cache, `*.writing` upload temp files) are filtered out. A newly seen label is first registered at 0 and its counts committed after the next scrape, so `increase($__range)` can observe the first increment |
 
 ### Advanced Metrics (requires vsftpd.log)
 

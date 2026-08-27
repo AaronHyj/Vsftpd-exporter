@@ -340,7 +340,7 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_login_total` | Counter | `-` | FTP 登录总次数(来源:vsftpd.log) |
 | `vsftp_last_login_time` | Gauge | `-` | 最后成功登录的 Unix 时间戳(来源:vsftpd.log) |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数(来源:xferlog) |
-| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数(来源:xferlog),`file_type` 为小写后缀(如 `ts`/`mp4`/`mkv`),无后缀为 `no_extension`。首次见到的标签先以 0 值注册、下一次抓取后再提交增量,保证 `increase($__range)` 能观测到首次增量 |
+| `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数(来源:xferlog),`file_type` 为小写后缀(如 `ts`/`mp4`/`mkv`),无后缀为 `no_extension`;vsftpd 内部/遍历文件(`.listing` 目录列表缓存、`*.writing` 上传临时文件)被过滤,不计入。首次见到的标签先以 0 值注册、下一次抓取后再提交增量,保证 `increase($__range)` 能观测到首次增量 |
 
 ### 高级监控指标（需启用 vsftpd.log）
 

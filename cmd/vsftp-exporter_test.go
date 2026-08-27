@@ -1064,3 +1064,124 @@ Sun Aug  9 16:34:55 2026 [pid 1239] [u4] FTP response: Client "192.168.1.105", "
 		t.Errorf("vsftpPasvPortRejectionsTotal 增量 = %v, 期望 1", got)
 	}
 }
+
+func TestIsNoiseTransfer(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{".listing", true},
+		{"/49/quant-app/picture/poster/.listing", true},
+		{"/49/quant-app/picture/2026-03-12/.listing", true},
+		{"photo.jpg.writing", true},
+		{"/tmp/x/.writing", true},
+		{"/49/quant-app/picture/poster/00/02/real.jpg", false},
+		{"/49/quant-app/picture/report.pdf", false},
+		{"/data/.config", false},      // 真实隐藏文件,不应误伤
+		{"/data/.listing.bak", false}, // 含 listing 字样但非精确后缀,不应误伤
+	}
+	for _, c := range cases {
+		if got := isNoiseTransfer(c.path); got != c.want {
+			t.Errorf("isNoiseTransfer(%q) = %v, 期望 %v", c.path, got, c.want)
+		}
+	}
+}
+
+func TestParseFTPLogNoiseFiltering(t *testing.T) {
+	// .listing/.writing 应被排除在 files_by_type_total 与 client_files_total 之外,
+	// 真实业务文件(real.jpg)应正常计数。注意 files_by_type 走冷启动暂存机制(KNOWN-016):
+	// 首次见到标签要经 bumpScrapeSeq + 再次解析后才提交,故需按既有多轮模式验证。
+	filesByTypeTotal.Reset()
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	log := `Wed Aug  5 10:00:00 2026 0 172.25.222.49 1024 /picture/poster/.listing b _ i a ftpupload ftp 0 * c
+Wed Aug  5 10:00:01 2026 0 172.25.222.49 2048 /picture/data.bin.writing b _ i a ftpupload ftp 0 * c
+Wed Aug  5 10:00:02 2026 0 172.25.222.49 5120 /picture/poster/00/02/real.jpg b _ i a ftpupload ftp 0 * c
+`
+	if err := os.WriteFile(path, []byte(log), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	state := NewExporterState()
+	state.lastProcessedTime = time.Now()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("parseFTPLog 失败: %v", err)
+	}
+
+	// client_files 为实时 Inc()(.listing/.writing 不计算;仅 real.jpg 计入)
+	if got := testutil.ToFloat64(clientFilesTotal.WithLabelValues("172.25.222.49", "upload")); got != 1 {
+		t.Errorf("client_files{172.25.222.49,upload} = %v, 期望 1(仅真实业务 jpg,过滤 .listing/.writing)", got)
+	}
+
+	// 提交 files_by_type:模拟抓取后再解析一轮
+	state.bumpScrapeSeq()
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("jpg", "upload")); got != 1 {
+		t.Errorf("files_by_type{jpg,upload} = %v, 期望 1(实际业务文件应计数)", got)
+	}
+	// .listing 和 *.writing 不应产生 file_type 系列
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("listing", "upload")); got != 0 {
+		t.Errorf("files_by_type{listing,upload} = %v, 期望 0(.listing 应被过滤)", got)
+	}
+	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("writing", "upload")); got != 0 {
+		t.Errorf("files_by_type{writing,upload} = %v, 期望 0(.writing 应被过滤)", got)
+	}
+}
+
+// TestSummaryExcludeIPv4MappedTimeout 验证 summary_exclude 开启时,日志来源 IP 以
+// IPv4-mapped IPv6 形式记录("::ffff:a.b.c.d",vsftpd listen_ipv6 典型现象)而探测
+// probeClientIP 为纯 IPv4("a.b.c.d")时,CONNECT 过滤在 normalizeClientIP 归一化后
+// 仍能正确命中(修复前字符串直接比较恒不等,导致探测自身被计入 rapid_reconnections)。
+func TestSummaryExcludeIPv4Mapped(t *testing.T) {
+	logContent := `Sun Aug  9 16:34:50 2026 [pid 1001] CONNECT: Client "::ffff:172.25.222.49"
+Sun Aug  9 16:34:51 2026 [pid 1001] [ostore] OK LOGIN: Client "::ffff:172.25.222.49"
+Sun Aug  9 16:34:52 2026 [pid 1001] CONNECT: Client "::ffff:172.25.222.49"
+Sun Aug  9 16:34:55 2026 [pid 1002] CONNECT: Client "::ffff:172.25.222.49"
+`
+	path := filepath.Join(t.TempDir(), "vsftpd.log")
+	if err := os.WriteFile(path, []byte(logContent), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	// 探测来源 IP 为纯 IPv4 形式
+	cfg := &Config{FTPUser: "ostore", SummaryExclude: true}
+	state := NewExporterState()
+	state.probeClientIP = "172.25.222.49"
+
+	beforeProbeConn := testutil.ToFloat64(clientConnectionsTotal.WithLabelValues("172.25.222.49"))
+	beforeReconn := testutil.ToFloat64(rapidReconnectionsTotal)
+	beforeOstore := testutil.ToFloat64(userLoginsTotal.WithLabelValues("ostore"))
+
+	if err := parseVsftpdLog(cfg, path, state, nil); err != nil {
+		t.Fatalf("parseVsftpdLog 失败: %v", err)
+	}
+
+	// 全部 3 次探测 CONNECT 与登录均被过滤
+	if got := testutil.ToFloat64(clientConnectionsTotal.WithLabelValues("172.25.222.49")) - beforeProbeConn; got != 0 {
+		t.Errorf("exclude=true+IPv4-mapped: 探测来源连接增量 = %v, 期望 0", got)
+	}
+	if got := testutil.ToFloat64(rapidReconnectionsTotal) - beforeReconn; got != 0 {
+		t.Errorf("exclude=true+IPv4-mapped: 快速重连增量 = %v, 期望 0", got)
+	}
+	if got := testutil.ToFloat64(userLoginsTotal.WithLabelValues("ostore")) - beforeOstore; got != 0 {
+		t.Errorf("exclude=true+IPv4-mapped: ostore 登录增量 = %v, 期望 0", got)
+	}
+}
+
+// TestNormalizeClientIP 验证 IPv4-mapped IPv6 归一化。
+func TestNormalizeClientIP(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"::ffff:172.25.222.49", "172.25.222.49"},
+		{"172.25.222.49", "172.25.222.49"},
+		{"2001:db8::1", "2001:db8::1"}, // 真实 IPv6,不应误改
+		{"192.168.1.100", "192.168.1.100"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := normalizeClientIP(c.in); got != c.want {
+			t.Errorf("normalizeClientIP(%q) = %q, 期望 %q", c.in, got, c.want)
+		}
+	}
+}

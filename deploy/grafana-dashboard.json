@@ -112,7 +112,8 @@
       "targets": [
         {
           "expr": "vsftp_login_success{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "FTP 服务状态",
@@ -172,7 +173,8 @@
       "targets": [
         {
           "expr": "vsftp_connections{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "总连接数",
@@ -232,7 +234,8 @@
       "targets": [
         {
           "expr": "vsftp_established_connections{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "活跃连接数",
@@ -288,7 +291,8 @@
       "targets": [
         {
           "expr": "vsftp_close_wait_connections{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "CLOSE_WAIT 连接",
@@ -340,7 +344,8 @@
       "targets": [
         {
           "expr": "vsftp_unique_clients{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "唯一客户端数",
@@ -392,7 +397,8 @@
       "targets": [
         {
           "expr": "vsftp_active_processes{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "活跃进程数",
@@ -461,7 +467,8 @@
       "targets": [
         {
           "expr": "increase(vsftp_upload_total{job=\"$job\", instance=\"$instance\"}[$__range])",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "上传次数",
@@ -515,7 +522,8 @@
       "targets": [
         {
           "expr": "increase(vsftp_download_total{job=\"$job\", instance=\"$instance\"}[$__range])",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "下载次数",
@@ -569,7 +577,8 @@
       "targets": [
         {
           "expr": "increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range])",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "上传字节总量",
@@ -623,7 +632,8 @@
       "targets": [
         {
           "expr": "increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range])",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "下载字节总量",
@@ -678,7 +688,8 @@
       "targets": [
         {
           "expr": "increase(vsftp_login_total{job=\"$job\", instance=\"$instance\"}[$__range])",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "登录总次数",
@@ -1043,132 +1054,6 @@
         "x": 0,
         "y": 26
       },
-      "id": 107,
-      "panels": [],
-      "title": "⚡ 带宽与速度指标",
-      "type": "row",
-      "fieldConfig": {
-        "defaults": {}
-      }
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "vsftpd 日志解析计算出的带宽(基于日志事件时间戳区间,单事件轮次不更新,见 bugrecord KNOWN-002)",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "B/s",
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "Bps"
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 12,
-        "x": 0,
-        "y": 27
-      },
-      "id": 28,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "lastNotNull",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "expr": "vsftp_bandwidth_usage_bytes_per_second{job=\"$job\", instance=\"$instance\"}",
-          "legendFormat": "实时带宽",
-          "refId": "A"
-        }
-      ],
-      "title": "实时带宽 (B/s)",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "description": "从程序启动至今的总传输字节/总运行时长,见 bugrecord KNOWN-003",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "Bps"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 12,
-        "x": 12,
-        "y": 27
-      },
-      "id": 29,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "targets": [
-        {
-          "expr": "vsftp_average_transfer_speed_bytes_per_second{job=\"$job\", instance=\"$instance\"}",
-          "legendFormat": "平均传输速度",
-          "refId": "A"
-        }
-      ],
-      "title": "平均传输速度 (B/s)",
-      "type": "stat"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 31
-      },
       "id": 102,
       "panels": [],
       "title": "⚠️ 错误与异常",
@@ -1207,7 +1092,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 32
+        "y": 27
       },
       "id": 17,
       "options": {
@@ -1227,7 +1112,8 @@
       "targets": [
         {
           "expr": "vsftp_failed_logins_total{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "登录失败总数",
@@ -1263,7 +1149,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 32
+        "y": 27
       },
       "id": 18,
       "options": {
@@ -1283,7 +1169,8 @@
       "targets": [
         {
           "expr": "vsftp_authentication_errors_total{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "认证错误总数",
@@ -1319,7 +1206,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 32
+        "y": 27
       },
       "id": 19,
       "options": {
@@ -1339,7 +1226,8 @@
       "targets": [
         {
           "expr": "vsftp_connection_timeouts_total{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "连接超时总数",
@@ -1375,7 +1263,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 32
+        "y": 27
       },
       "id": 20,
       "options": {
@@ -1395,7 +1283,8 @@
       "targets": [
         {
           "expr": "vsftp_max_connections_reached_total{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "最大连接数限制",
@@ -1431,7 +1320,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 32
+        "y": 27
       },
       "id": 21,
       "options": {
@@ -1451,7 +1340,8 @@
       "targets": [
         {
           "expr": "vsftp_rapid_reconnections_total{job=\"$job\", instance=\"$instance\"}",
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{group}}"
         }
       ],
       "title": "快速重连次数",
@@ -1484,7 +1374,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 31
       },
       "id": 22,
       "options": {
@@ -1558,7 +1448,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 36
+        "y": 31
       },
       "id": 23,
       "options": {
@@ -1617,7 +1507,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 52
       },
       "id": 104,
       "options": {
@@ -1650,7 +1540,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 60
       },
       "id": 103,
       "panels": [],
@@ -1687,7 +1577,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 66
+        "y": 61
       },
       "id": 24,
       "options": {
@@ -1739,7 +1629,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 66
+        "y": 61
       },
       "id": 25,
       "options": {
@@ -1791,7 +1681,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 74
+        "y": 69
       },
       "id": 26,
       "options": {
@@ -1842,7 +1732,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 74
+        "y": 69
       },
       "id": 27,
       "options": {
@@ -1881,7 +1771,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 82
+        "y": 77
       },
       "id": 105,
       "panels": [],
@@ -1915,7 +1805,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 83
+        "y": 78
       },
       "id": 106,
       "options": {
@@ -1952,7 +1842,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 39
       },
       "id": 108,
       "panels": [],
@@ -1994,7 +1884,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 45
+        "y": 40
       },
       "id": 109,
       "options": {
@@ -2023,7 +1913,7 @@
       "targets": [
         {
           "expr": "vsftp_idle_timeout_total{job=\"$job\", instance=\"$instance\"}",
-          "legendFormat": "__auto",
+          "legendFormat": "{{group}}",
           "refId": "A"
         }
       ],
@@ -2062,7 +1952,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 45
+        "y": 40
       },
       "id": 110,
       "options": {
@@ -2091,7 +1981,7 @@
       "targets": [
         {
           "expr": "vsftp_data_connection_timeout_total{job=\"$job\", instance=\"$instance\"}",
-          "legendFormat": "__auto",
+          "legendFormat": "{{group}}",
           "refId": "A"
         }
       ],
@@ -2130,7 +2020,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 45
+        "y": 40
       },
       "id": 111,
       "options": {
@@ -2159,7 +2049,7 @@
       "targets": [
         {
           "expr": "sum(vsftp_connection_limit_rejections_total{reason=\"max_clients\", job=\"$job\", instance=\"$instance\"})",
-          "legendFormat": "__auto",
+          "legendFormat": "{{group}}",
           "refId": "A"
         }
       ],
@@ -2198,7 +2088,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 45
+        "y": 40
       },
       "id": 112,
       "options": {
@@ -2227,7 +2117,7 @@
       "targets": [
         {
           "expr": "sum(vsftp_connection_limit_rejections_total{reason=\"max_per_ip\", job=\"$job\", instance=\"$instance\"})",
-          "legendFormat": "__auto",
+          "legendFormat": "{{group}}",
           "refId": "A"
         }
       ],
@@ -2266,7 +2156,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 45
+        "y": 40
       },
       "id": 113,
       "options": {
@@ -2295,7 +2185,7 @@
       "targets": [
         {
           "expr": "vsftp_pasv_port_rejections_total{job=\"$job\", instance=\"$instance\"}",
-          "legendFormat": "__auto",
+          "legendFormat": "{{group}}",
           "refId": "A"
         }
       ],
@@ -2360,7 +2250,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 44
       },
       "id": 114,
       "options": {

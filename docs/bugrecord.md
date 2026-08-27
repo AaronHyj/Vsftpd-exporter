@@ -76,6 +76,10 @@
 | BUG-061 | 低 | `Makefile` | `.PHONY` 声明不全: `all`、`coverage`、`tidy`、`build-all`、`build-linux`、`build-windows`、`build-darwin` 未在 `.PHONY` 中声明。GNU make 默认把这些目标视为文件名(若存在同名文件则跳过 recipe),虽当前无同名文件无害,但重构时可能产生意外跳过。 | 已修复 |
 | BUG-062 | 中 | `cmd/metrics.go` / `cmd/parsers.go` | 依据 vsftpd_conf.html 新增 A1-A4 细分监控:`vsftp_idle_timeout_total`(idle_session_timeout)、`vsftp_data_connection_timeout_total`(data_connection_timeout)、`vsftp_connection_limit_rejections_total{reason=max_clients|max_per_ip}`、`vsftp_pasv_port_rejections_total`;并新增 5 条告警、Grafana 面板与文档(英文 "A5" ASCII 未做,由用户权衡后跳过) | 已完成 |
 | BUG-063 | 低 | `cmd/vsftp-exporter_test.go` | BUG-062 新增测试在文件末尾追加时多出一个空行,`gofmt -l` 报格式不符(gofmt:多个函数间仅应有一个空行)。 | 已修复 |
+| BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
+| BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
+| BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-067 | 低 | `deploy/grafana-dashboard.json` | 带宽/速度重复展示且数据不一致:`「⚡ 带宽与速度指标」行(面板28 实时带宽、面板29 平均传输速度)与「📈 传输统计」中的面板14(传输速率 MiB/s)、面板15(带宽与传输速度)功能重复;且 28/29 基于计算型 gauge(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_bytes_per_second`),后者有 KNOWN-003 语义缺陷(总字节/总运行时长),数值与基于 counter(`rate`/`increase` on `vsftp_upload/download_bytes_total`)的面板14/15 不一致。已删除整行(面板28/29/107),保留准确的 counter 推导面板14/15。 | 已修复 |
 
 ## 详细说明
 
@@ -665,15 +669,108 @@ ASCII 仅表示文本/二进制模式差异,监控 ROI 低,详见对话记录。
 
 **修复**:`gofmt -w cmd/vsftp-exporter_test.go` 移除多余空行。
 
+
+
+### BUG-064:xferlog 后缀/客户端统计被 .listing、.writing 内部文件污染(中)
+
+**位置**:`cmd/parsers.go` `parseFTPLog` 完成传输分支(原 424-428 行)。
+
+**问题**:`files_by_type_total`(file_type 标签)与 `client_files_total`(client_ip,direction 标签)把 vsftpd
+内部产生的两类文件也计入业务传输统计:
+- `.listing`:vsftpd 目录列表缓存文件。客户端(尤其图形 FTP 客户端)遍历目录时,vsftpd 对每个目录读/写
+  `.listing`,每条都记为一次"传输"。业务目录层数深/子目录多时(如 `poster/00/02` 的哈希目录),会产生海量
+  `.listing` 记录(实测可达百万级),严重污染 file_type 统计并制造无意义的系列点数。
+- `*.writing`:vsftpd 上传临时文件(写完才 rename 为正式文件名),也作为一次独立传输计入。
+
+附带澄清:`recordTypeEvent`(`files_by_type_total`)只在 `parseFTPLog`(xferlog)调用,`parseVsftpdLog`
+(vsftpd.log)不调用,故这些噪音来自 xferlog,而非 vsftpd.log 解析。
+
+**修复**:新增 `isNoiseTransfer(filePath)` 辅助函数,按**文件基名精确后缀**匹配两类噪音:
+- 基名以 `.writing` 结尾;
+- 基名以 `.listing` 结尾。
+在完成传输分支用 `if !isNoiseTransfer(filePath)` 包裹 `clientFilesTotal.WithLabelValues(...)` 与
+`recordTypeEvent(...)`,使噪音不计入 suffix 与客户端文件统计。**不改变** upload/download/bytes/transferDuration
+等真实传输计数(带宽、流量告警不受影响)。
+
+精确匹配避免误伤:真实隐藏文件(如 `.config`)、含 listing 字样的业务文件(如 `.listing.bak`)不会被过滤。
+
+**验证**:新增 `TestIsNoiseTransfer`(9 案例,含不误伤判定)与 `TestParseFTPLogNoiseFiltering`
+(遵循 files_by_type 冷启动提交机制,验证 real.jpg 计入、.listing/.writing 不计入)。
+`go build -o /dev/null ./cmd`、`go vet ./...`、`go test -race -count=1 ./cmd`、JSON/YAML 校验全部通过。
+
+
+
+### BUG-065:summary_exclude 对 IPv4-mapped 来源 IP 过滤失效,探测自身计入快速重连(中)
+
+**位置**:`cmd/parsers.go` 的 summary_exclude 过滤(CONNECT / FAIL LOGIN / FTP response 三处
+来源 IP 比较)。
+
+**问题**:过滤用字符串直接比较 `clientIP == state.probeClientIP`。其中 `state.probeClientIP`
+由 `conn.LocalAddr()` 得到,Exporter 走 IPv4 出口时是纯四段 `172.25.x.x`;而 vsftpd 在开启
+`listen_ipv6` 时会把所有来源地址(含 IPv4)记成 IPv4-mapped IPv6 形式 `::ffff:172.25.x.x`。
+两者字符串恒不相等(即使用户并未经过 NAT),导致 `summary_exclude=true` 对 CONNECT 事件失效:
+- 探测自身的 CONNECT 被计入 `vsftp_client_connections_total`(每次探测 +1);
+- 探测连接扫 30s 一次、恰满足"同一 IP ≤30s 内再次 CONNECT"条件,`vsftp_rapid_reconnections_total`
+  被探测自身主导而持续增长(与用户"自动重连次数不停增加"的现象吻合)。
+FAIL LOGIN / FTP response 因另有 `username == FTPUser` 兜底受影响较小,但 CONNECT 无用户名信息,只能靠 IP 匹配。
+
+**修复**:新增 `normalizeClientIP(ip)`,统一去 `::ffff:` 前缀,过滤处改为
+`normalizeClientIP(clientIP) == normalizeClientIP(state.probeClientIP)`(三处:CONNECT、FAIL LOGIN、FTP response)。
+归一化对真实 IPv6(如 `2001:db8::1`)不误改;对真实 NAT(源 IP 确实被改写为另一地址)仍无法根治,属 KNOWN-004/006 范畴。
+
+**验证**:新增 `TestNormalizeClientIP`(含真实 IPv6 不误改)与 `TestSummaryExcludeIPv4Mapped`
+(探测来源纯 IPv4 + 日志记录为 IPv4-mapped 时,3 次 CONNECT/登录全部被过滤,rapid_reconnections 增量为 0)。
+`go build`、`go vet`、`go test -race -count=1`、JSON/YAML 校验全部通过。
+
+
+
+### BUG-066:stat 面板未设 legendFormat,图例暴露完整指标查询语句(低)
+
+**位置**:`deploy/grafana-dashboard.json` 的 stat 面板 targets。
+
+**问题**:16 个 stat 面板(总连接数/活跃连接数/CLOSE_WAIT/唯一客户端/活跃进程/上传次数/下载次数/
+上传字节/下载字节/登录次数/登录失败/认证错误/连接超时/最大连接限制/快速重连/FTP状态)的 target 未设置
+`legendFormat`,另有 5 个新建面板(109-113)用了 `__auto`。这些 stat 面板的 `textMode=value_and_name`,
+在查询返回带 `group` 等多标签的序列时,图例/名称退化为显示完整 PromQL 序列标识,例如:
+`vsftp_established_connections{group="Aotian", instance="172.25.199.2:9101", job="vsftpdMon"}`,
+把指标查询语句原样暴露在仪表盘上,既不美观也易误导。
+(注:`group` 标签来自用户自己的 Prometheus 抓取配置 external_labels/relabel,exporter 本身不产出。)
+
+**修复**:将这 21 个 stat target 的 `legendFormat` 统一设为 `{{group}}`,使图例只显示分组名(如
+`Aotian`),不再暴露完整查询序列。当部署中无 `group` 标签时渲染为空串,也优于完整查询串。
+
+**验证**:`deploy/grafana-dashboard.json` JSON 校验通过,面板数仍 44,target 均含合法 legendFormat。
+
+
+
+### BUG-067:带宽/速度面板重复且数据不一致(低)
+
+**位置**:`deploy/grafana-dashboard.json`。
+
+**问题**:仪表盘存在两处带宽/速度展示,数据不一致,导致用户困惑:
+- 「📈 传输统计」行:面板14「传输速率 (MiB/s)」(`rate(vsftp_upload/download_bytes_total[5m])/1024/1024`)、
+  面板15「带宽与传输速度」(`increase(...[$__range]) / ($__range_ms/1000)`)——**基于 counter,准确**。
+- 「⚡ 带宽与速度指标」行:面板28「实时带宽」(`vsftp_bandwidth_usage_bytes_per_second`)、
+  面板29「平均传输速度」(`vsftp_average_transfer_speed_bytes_per_second`)——**基于计算型 gauge**,
+  其中 29 有 KNOWN-003 语义缺陷(总字节/总运行时长,lastProcessedTime 仅启动初始化),28 只在本轮
+  日志解析时更新、用本轮日志时间跨度,数值均与 counter 推导的面板14/15 不一致。
+
+**修复**:删除「⚡ 带宽与速度指标」整行(面板 28、29 及行头 107),保留基于 counter 的准确面板 14、15。
+metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_bytes_per_second`)
+仍在代码中保留(向后兼容),仅移除其在仪表盘上的误导性重复展示。布局已重新压缩(移除共占 5 行,
+后续面板 y 坐标整体上移),无面板重叠,面板数 44->41。
+
+**验证**:`deploy/grafana-dashboard.json` JSON 校验通过,重叠数 0,保留面板均正确归属原行。
+
 ## 已知特性说明
 
 | 编号 | 说明 |
 |------|------|
 | KNOWN-002 | `vsftp_bandwidth_usage_bytes_per_second` 语义有限：单事件轮次（时间跨度=0）不更新；事件时间跨度大（日志空档）时会算出一个偏小的"平均带宽"。建议以 PromQL `rate(vsftp_upload_bytes_total + vsftp_download_bytes_total[5m])` 为主。 |
 | KNOWN-003 | `vsftp_average_transfer_speed_bytes_per_second` 的除数是程序总运行时长（`state.lastProcessedTime` 仅在启动时初始化、不再更新），即"总字节/总运行时长"；字段名 `lastProcessedTime` 有误导性。 |
-| KNOWN-004 | 探测污染过滤依赖 `summary_exclude` 与 `probeClientIP`:`OK LOGIN`/`FAIL LOGIN`/FTP response 可同时按探测用户名 `FTPUser` 或 IP 过滤(`parsers.go:606/639/727`);但 `CONNECT` 事件只含 IP、只能按 `probeClientIP` 过滤,且 `probeClientIP` 仅在探测成功时由 `conn.LocalAddr()` 设置——若探测自启动起持续失败(`probeClientIP==""`)或经 NAT 后源 IP 与日志 Client IP 不一致,`CONNECT`/`clientConnectionsTotal`/`rapidReconnections` 会漏。建议用专用探测账号并设置 `summary_exclude=true`(OK/FAIL/FTP-response 已默认覆盖)。 |
+| KNOWN-004 | 探测污染过滤依赖 `summary_exclude` 与 `probeClientIP`:来源 IP 比较经 `normalizeClientIP()` 统一 IPv4-mapped IPv6 格式(BUG-065 已修复 `::ffff:` 差异);但仍需探测来源 IP 在数值上等于日志 Client IP——若探测自启动起持续失败(`probeClientIP==""`)或经真实 NAT 后源 IP 被改写为另一地址,`CONNECT`/`clientConnectionsTotal`/`rapidReconnections` 仍会漏计。建议用专用探测账号并设置 `summary_exclude=true`(OK/FAIL/FTP-response 另有账号名兜底)。 |
 | KNOWN-005 | `state.probeClientIP` 仅在探测成功时更新;探测失败(如 FTP 端口不可达)时保留上一次成功值。因 exporter 自身 IP 一般稳定,影响有限;若 exporter 网络出口 IP 变化,`summary_exclude` 可能无法过滤新的探测来源 IP。 |
-| KNOWN-006 | CONNECT 事件无用户名信息,仅含来源 IP。NAT/网关场景下,探测连接的来源 IP 经转换后与 `state.probeClientIP`(探测本地出口 IP)不一致,`summary_exclude` 无法按 IP 过滤 CONNECT 事件,导致 `vsftp_client_connections_total` 被探测污染(每次探测 +1)。这是日志信息不足导致的固有限制,非代码缺陷;需部署侧排除 exporter 自身 IP 才能完全消除。 |
+| KNOWN-006 | CONNECT 事件无用户名信息,仅含来源 IP。IPv4-mapped IPv6 表示差异已由 BUG-065 修复;仅剩真实 NAT/网关(探测源 IP 被 CONNTRACK 改写为网关出口地址,数值不再等于 `probeClientIP`)时,`summary_exclude` 无法按 IP 过滤 CONNECT,`vsftp_client_connections_total` 和 `vsftp_rapid_reconnections_total` 会被探测污染。这是日志信息不足导致的固有限制,非代码缺陷;需部署侧排除 exporter 自身 IP 才能完全消除。 |
 | KNOWN-007 | `vsftp_user_connections_total` 与 `vsftp_user_logins_total` 在 OK LOGIN 分支同步递增(BUG-006 修复后遗留),两者永远相等,无独立统计意义。仪表盘仅使用 `vsftp_user_logins_total`。保留该指标仅为向后兼容。 |
 | KNOWN-008 | `/health` 在首次探测完成前(`lastProbe.checkTime` 为零值)返回 HTTP 200 healthy。BUG-049 修复后首次探测最迟 10s 内完成,故该"未探测即健康"窗口通常短暂可接受;但在监控协程因其他原因长时间未运行探测时,`/health` 可能误报健康。 |
 | KNOWN-009 | 日志尾部存在"永久半行"(永不出现换行、如进程崩溃/外部截断残留)时,`readLocalFile`/`readRemoteFile` 每次读到该半行都会 break 且不推进 position,若其后有新行追加则永远读不到,静默丢失后续事件。正常条件下的尾部半行随后会补全(BUG-009/028 已处理),永久半行属异常残留;修复需跨轮次状态机(连续 N 轮不补全即强制消费),当前作为已知限制记录。 |
