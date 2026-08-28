@@ -62,6 +62,19 @@ jobs:
             echo "VERSION=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: 提取上一版本 tag(用于生成 Release Notes)
+        id: prevtag
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            # 当前 tag 的父提交往前找最近的 tag;无上一 tag(首个发布)时输出空
+            prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+            echo "PREV_TAG=${prev}" >> "$GITHUB_OUTPUT"
+            echo "prev_tag=${prev:-<none>}"
+          else
+            echo "PREV_TAG=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 构建并打包多平台二进制
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
@@ -95,6 +108,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.VERSION }}
+          PREV_TAG: ${{ steps.prevtag.outputs.PREV_TAG }}
         run: |
           set -euo pipefail
           api="${{ github.server_url }}/api/v1"
@@ -102,23 +116,43 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           auth="Authorization: token ${GITHUB_TOKEN}"
 
+          # ---- 生成 Release Notes 正文:列出自上一 tag 的全部提交 ----
+          body="Vsftpd exporter ${VERSION} 发布。\n"
+          if [ -n "${PREV_TAG}" ]; then
+            body="${body}\n## 变更内容(自 ${PREV_TAG})\n"
+            while IFS= read -r line; do
+              [ -n "${line}" ] && body="${body}- ${line}\n"
+            done < <(git log --no-decorate --oneline "${PREV_TAG}..${tag}" 2>/dev/null || true)
+          else
+            body="${body}\n## 首版发布\n"
+            while IFS= read -r line; do
+              [ -n "${line}" ] && body="${body}- ${line}\n"
+            done < <(git log --no-decorate --oneline "${tag}" 2>/dev/null | head -50 || true)
+          fi
+          echo "--- release notes ---"
+          printf '%b' "${body}"
+
           extract_id() {
-            # 优先 jq；兜底取第一个 "id": 字段
             jq -r '.id // empty' 2>/dev/null || \
               grep -o '"id":[0-9]*' | head -1 | cut -d: -f2
           }
 
           existing="$(curl -sS -H "${auth}" "${api}/repos/${repo}/releases/tags/${tag}")"
           release_id="$(printf '%s' "${existing}" | extract_id)"
+          # 用 jq 构造 JSON,避免提交说明中的引号/反斜杠破坏 payload
+          payload="$(jq -n --arg tag "${tag}" --arg name "vsftp-exporter ${VERSION}" --arg body "$(printf '%b' "${body}")" \
+            '{tag_name:$tag, name:$name, body:$body}')"
           if [ -z "${release_id}" ] || [ "${release_id}" = "null" ]; then
-            payload="{\"tag_name\":\"${tag}\",\"name\":\"vsftp-exporter ${VERSION}\",\"body\":\"Vsftpd exporter ${VERSION} 发布。\"}"
+            echo "--- create payload ---"
+            printf '%s' "${payload}"
             created="$(curl -sS -X POST -H "${auth}" -H "Content-Type: application/json" -d "${payload}" "${api}/repos/${repo}/releases")"
             release_id="$(printf '%s' "${created}" | extract_id)"
+          else
+            # 已存在(如旧文案创建的 release):PATCH 更新正文与标题,使其带上本版变更说明
+            echo "--- update payload ---"
+            printf '%s' "${payload}"
+            curl -sS -X PATCH -H "${auth}" -H "Content-Type: application/json" \
+              -d "${payload}" \
+              "${api}/repos/${repo}/releases/${release_id}" >/dev/null
           fi
           echo "release_id=${release_id}"
-
-          for f in vsftp-exporter-*.tar.gz; do
-            curl -sS -X POST -H "${auth}" -H "Content-Type: application/octet-stream" \
-              --data-binary "@${f}" \
-              "${api}/repos/${repo}/releases/${release_id}/assets?name=${f}"
-          done
