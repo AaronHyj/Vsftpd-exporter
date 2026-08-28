@@ -341,6 +341,7 @@ Possible `reason` label values for `vsftp_ftp_errors_total`:
 | `vsftp_last_login_time` | Gauge | `-` | Unix timestamp of the last successful login (source: vsftpd.log) |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | File transfers per client IP and direction (source: xferlog) |
 | `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | Files transferred per file extension and direction (source: xferlog); `file_type` is the lowercase extension (e.g. `ts`/`mp4`/`mkv`), or `no_extension` for files without one; vsftpd internal/traversal files (`.listing` directory-list cache, `*.writing` upload temp files) are filtered out. A newly seen label is first registered at 0 and its counts committed after the next scrape, so `increase($__range)` can observe the first increment |
+| `vsftp_internal_transfers_total` | Counter | `direction` | Number of vsftpd internal/traversal transfers (`.listing` directory-list cache, `*.writing` upload temp files), kept separate from business upload/download counts to observe traversal activity |
 
 ### Advanced Metrics (requires vsftpd.log)
 
@@ -405,6 +406,9 @@ rule_files:
 - Service status overview: FTP service status, total connections, active connections, unique clients, active processes
 - Transfer statistics: upload/download counts, byte increments and total logins (as increments within the selected time range), last login time split into separate date and time rows, average upload/download/total bandwidth over the selected time range, connection state trend, transfer rate (MiB/s)
 - Error monitoring: failed logins, authentication errors, connection timeouts, max-connections limit, rapid reconnections, and FTP protocol error rates split by `reason`
+- File-type statistics: transfer counts aggregated by extension (`vsftp_files_by_type_total`)
+- Internal/traversal transfer statistics: `vsftp_internal_transfers_total` (directory-list cache `.listing`, upload temp files `*.writing` and other vsftpd internal/traversal transfers, separated from business upload/download counts), with a total stat and per-direction rate chart
+- Connection limits & timeouts (at the very bottom of the dashboard): idle-session timeout, data-connection timeout, max_clients, max_per_ip, PASV port failures and their rate trends
 
 Dashboard features:
 

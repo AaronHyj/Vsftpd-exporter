@@ -168,6 +168,11 @@ var (
 		Name: "vsftp_files_by_type_total",
 		Help: "Total number of files transferred by file extension and direction.",
 	}, []string{"file_type", "direction"})
+
+	internalTransfersTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vsftp_internal_transfers_total",
+		Help: "Total number of vsftpd internal/traversal transfers (e.g. .listing directory-list cache, *.writing upload temp files) by direction. These are excluded from business transfer counters.",
+	}, []string{"direction"})
 )
 
 func init() {
@@ -200,6 +205,7 @@ func init() {
 		activeProcesses,
 		clientFilesTotal,
 		filesByTypeTotal,
+		internalTransfersTotal,
 		vsftpIdleTimeoutTotal,
 		vsftpDataConnTimeoutTotal,
 		vsftpConnLimitRejectedTotal,

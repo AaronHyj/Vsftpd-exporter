@@ -79,6 +79,8 @@
 | BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
 | BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
 | BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-070 | 低 | `deploy/grafana-dashboard.json` / README | 仪表盘配套更新:新增「🔧 内部/遍历传输统计」行(面板116 内部传输总数 stat + 面板117 内部传输速率按方向 timeseries);「🔒 连接限制与超时」行(108/109-114)移动到仪表盘最底部;面板104(FTP 错误分类速率)从连接限制行下方归位到「⚠️ 错误与异常」行;仪表盘 version 3→4。README(中英)面板清单补充文件类型/内部传输/连接限制行。 | 已修复 |
+| BUG-069 | 中 | `cmd/parsers.go` / `cmd/metrics.go` | BUG-064 只过滤了`.listing`/`.writing` 进入后缀与客户端文件统计,仍会计入`vsftp_upload_total`/`vsftp_download_total` 及字节量;现网 xferlog 中目录列表缓存每秒几十条,导致"上传/下载次数"被内部文件主导失真。已改为:`.listing`/`*.writing` 完全不计入业务上传/下载次数、字节量与带宽,仅计入新增的 `vsftp_internal_transfers_total{direction}`(xferlog 与 vsftpd.log 两条路径一致)。 | 已修复 |
 | BUG-068 | 低 | `deploy/grafana-dashboard.json` | BUG-066 给 stat 面板设的 `legendFormat: "{{group}}"` 在单 group 部署下把 sequence名 显示在面板上(`textMode=value_and_name`),每个面板都显示 "Aotian"。已将 21 个单目标 stat 面板的 `textMode` 改为 `value`(只显示数值,不显示名称);多目标面板(最后登录时间、带宽与传输速度)保留 `value_and_name` 且 legend 为语义化名称,不受影响。 | 已修复 |
 | BUG-067 | 低 | `deploy/grafana-dashboard.json` | 带宽/速度重复展示且数据不一致:`「⚡ 带宽与速度指标」行(面板28 实时带宽、面板29 平均传输速度)与「📈 传输统计」中的面板14(传输速率 MiB/s)、面板15(带宽与传输速度)功能重复;且 28/29 基于计算型 gauge(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_bytes_per_second`),后者有 KNOWN-003 语义缺陷(总字节/总运行时长),数值与基于 counter(`rate`/`increase` on `vsftp_upload/download_bytes_total`)的面板14/15 不一致。已删除整行(面板28/29/107),保留准确的 counter 推导面板14/15。 | 已修复 |
 
@@ -779,6 +781,55 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 序列,保留 `value_and_name`,且其 legendFormat 本就是语义化中文名(日期/时间/上传平均带宽等),不受影响。
 
 **验证**:`deploy/grafana-dashboard.json` JSON 校验通过,面板数 41、零重叠;多目标面板仍为 value_and_name。
+
+
+
+### BUG-069:.listing/.writing 仍计入上传/下载次数导致业务计数失真(中)
+
+**位置**:`cmd/parsers.go` `parseFTPLog`(431-460 区域)与 `parseVsftpdLog`(OK UPLOAD/DOWNLOAD 分支)、`cmd/metrics.go`。
+
+**问题**:BUG-064 只让 `.listing`/`*.writing` 不进 `files_by_type_total` 与 `client_files_total`,但
+**上传/下载次数(`vsftp_upload_total`/`vsftp_download_total`)与字节量仍计入**。现网 xferlog 中,客户端遍历
+目录树时 vsftpd 对每个目录生成/读取 `.listing`(目录列表缓存),同一秒内可出现几十条,方向 `i`(上传)与
+`o`(下载)混合、字节为 0。结果是"上传/下载次数"面板数字几乎全由内部缓存活动构成,业务传输数量完全失真;
+带宽(`rate`/`increase` 于字节 counter)也被海量 0 字节事件稀释。现网实测 `.listing` 可达百万级。
+
+**修复**:
+- `parseFTPLog`(xferlog):完成传输分支先判 `isNoiseTransfer(filePath)`,命中则仅
+  `internalTransfersTotal.WithLabelValues(dirLabel).Inc()` 并 `continue`,不再进入 upload/download
+  次数、字节、`totalBytesThisRound`(带宽)、后缀与客户端文件统计。
+- `parseVsftpdLog`(vsftpd.log):OK UPLOAD/OK DOWNLOAD 分支同样在解析字节前判
+  `isNoiseTransfer(matches[5])`,命中则计入 `internalTransfersTotal`(direction upload/download)并跳过业务计数。
+- 新增指标 `vsftp_internal_transfers_total{direction=upload|download}`,单独观测 vsftpd 内部/遍历
+  活动(目录遍历、缓存写入等),既去除业务噪音又保留可观测性。
+
+**影响**:语义变更——业务上传/下载次数与字节量不再包含 `.listing`/`*.writing`;已部署实例的历史计数不回退,
+重新部署后新计数的值与历史存在跳变(面板应配"重置后基线"或接受该跳变)。带宽面板同样不再被稀释。
+
+**验证**:`TestParseFTPLogNoiseFiltering` 扩展(1 jpg 计入 upload=1/bytes=5120,2 噪音计入 internal_transfers=2)、
+新增 `TestParseVsftpdLogNoiseFiltering`(upload/download 各 1 个 .listing 计入 internal_transfers,业务计数为 0)。
+`go build`、`go vet`、`go test -race -count=1`、JSON/YAML 校验全部通过。
+
+
+
+### BUG-070:仪表盘配套更新——内部传输面板与连接限制行置底(低)
+
+**位置**:`deploy/grafana-dashboard.json`、`README.md` / `README_EN.md`。
+
+**内容**(配合 BUG-069 新增 `vsftp_internal_transfers_total` 指标与用户布局要求):
+1. 新增「🔧 内部/遍历传输统计」行(行头 115),含:
+   - 面板 116「内部传输总数」stat:`sum(vsftp_internal_transfers_total{...})`;
+   - 面板 117「内部传输速率 (次/分钟)」timeseries:按 `direction` 的
+     `rate(...[5m])*60` 两条(上传/下载)。
+2. 「🔒 连接限制与超时」行(108,面板 109-114)整体**移动到仪表盘最底部**(第 7 行),
+   位于内部传输行之后;同时面板 104(FTP 错误分类速率)归位到「⚠️ 错误与异常」行
+   (之前布局上落在连接限制行下方,语义属错误分类)。
+3. 布局整体重排为 7 个行区块,44 面板、零重叠;仪表盘 `version` 3→4。
+4. README(中英)面板清单补充文件类型统计、内部/遍历传输统计、连接限制与超时(置底)三行说明。
+
+**验证**:`deploy/grafana-dashboard.json` JSON 校验通过,44 面板零重叠,行顺序自上而下
+为:服务状态概览 → 传输统计 → 错误与异常 → 客户端与用户统计 → 文件类型统计 →
+内部/遍历传输统计 → 连接限制与超时(最底部);全部 expr 均含 `group="$group"` 过滤。
 
 ## 已知特性说明
 

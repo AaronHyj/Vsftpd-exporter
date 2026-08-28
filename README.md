@@ -341,6 +341,7 @@ sudo systemctl enable --now vsftp-exporter
 | `vsftp_last_login_time` | Gauge | `-` | 最后成功登录的 Unix 时间戳(来源:vsftpd.log) |
 | `vsftp_client_files_total` | Counter | `client_ip`, `direction` | 按客户端 IP 和方向统计的文件传输数(来源:xferlog) |
 | `vsftp_files_by_type_total` | Counter | `file_type`, `direction` | 按文件后缀和方向统计的传输文件数(来源:xferlog),`file_type` 为小写后缀(如 `ts`/`mp4`/`mkv`),无后缀为 `no_extension`;vsftpd 内部/遍历文件(`.listing` 目录列表缓存、`*.writing` 上传临时文件)被过滤,不计入。首次见到的标签先以 0 值注册、下一次抓取后再提交增量,保证 `increase($__range)` 能观测到首次增量 |
+| `vsftp_internal_transfers_total` | Counter | `direction` | vsftpd 内部/遍历产生的传输次数(目录列表缓存 `.listing`、上传临时文件 `*.writing`),与业务上传/下载计数分离,便于观察遍历行为本身 |
 
 ### 高级监控指标（需启用 vsftpd.log）
 
@@ -405,6 +406,9 @@ rule_files:
 - 服务状态概览：FTP 服务状态、总连接数、活跃连接数、唯一客户端数、活跃进程数
 - 传输统计：上传/下载次数、字节增量、登录总次数（均为所选时间段内增量）、最后登录时间（日期/时分秒两行显示）、带宽与传输速度（所选时间段内上传/下载/总平均带宽）、连接状态趋势图、传输速率图 (MB/s)
 - 错误监控：登录失败/认证错误/连接超时/最大连接数限制/快速重连，以及按 `reason` 分类的 FTP 协议错误速率
+- 文件类型统计:按后缀聚合的传输计数(`vsftp_files_by_type_total`)
+- 内部/遍历传输统计:`vsftp_internal_transfers_total`(目录列表缓存 `.listing`、上传临时文件 `*.writing` 等 vsftpd 内部/遍历传输,已从业务上传/下载计数中分离),含总数 stat 与按方向速率图
+- 连接限制与超时(位于仪表盘最底部):空闲会话超时、数据连接超时、全局连接上限(max_clients)、单 IP 连接超限(max_per_ip)、PASV 连接失败及对应速率趋势
 
 仪表板特性：
 

@@ -1092,6 +1092,9 @@ func TestParseFTPLogNoiseFiltering(t *testing.T) {
 	// 真实业务文件(real.jpg)应正常计数。注意 files_by_type 走冷启动暂存机制(KNOWN-016):
 	// 首次见到标签要经 bumpScrapeSeq + 再次解析后才提交,故需按既有多轮模式验证。
 	filesByTypeTotal.Reset()
+	beforeUpload := testutil.ToFloat64(ftpUploadTotal)
+	beforeBytes := testutil.ToFloat64(uploadBytesTotal)
+	beforeInternalUp := testutil.ToFloat64(internalTransfersTotal.WithLabelValues("upload"))
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "xferlog")
 	log := `Wed Aug  5 10:00:00 2026 0 172.25.222.49 1024 /picture/poster/.listing b _ i a ftpupload ftp 0 * c
@@ -1127,6 +1130,19 @@ Wed Aug  5 10:00:02 2026 0 172.25.222.49 5120 /picture/poster/00/02/real.jpg b _
 	}
 	if got := testutil.ToFloat64(filesByTypeTotal.WithLabelValues("writing", "upload")); got != 0 {
 		t.Errorf("files_by_type{writing,upload} = %v, 期望 0(.writing 应被过滤)", got)
+	}
+
+	// BUG-064 增强:.listing/.writing 也不应计入上传次数与字节,仅计入内部传输计数。
+	// 前两轮解析已消费整个文件(offset 机制不再重复计数),故直接检查累计差值:
+	// 1 个业务 jpg 计入 upload_total/bytes,2 个噪音计入 internal_transfers。
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 1 {
+		t.Errorf("upload_total 增量 = %v, 期望 1(仅业务 jpg,.listing/.writing 不计入)", got)
+	}
+	if got := testutil.ToFloat64(uploadBytesTotal) - beforeBytes; got != 5120 {
+		t.Errorf("upload_bytes 增量 = %v, 期望 5120(仅业务 jpg 字节)", got)
+	}
+	if got := testutil.ToFloat64(internalTransfersTotal.WithLabelValues("upload")) - beforeInternalUp; got != 2 {
+		t.Errorf("internal_transfers{upload} 增量 = %v, 期望 2(.listing + .writing)", got)
 	}
 }
 
@@ -1183,5 +1199,45 @@ func TestNormalizeClientIP(t *testing.T) {
 		if got := normalizeClientIP(c.in); got != c.want {
 			t.Errorf("normalizeClientIP(%q) = %q, 期望 %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestParseVsftpdLogNoiseFiltering 验证 vsftpd.log 路径(OK UPLOAD/DOWNLOAD)下
+// .listing/.writing 也被视为内部传输,不计入业务上传/下载计数(BUG-064 增强)。
+func TestParseVsftpdLogNoiseFiltering(t *testing.T) {
+	beforeUpload := testutil.ToFloat64(ftpUploadTotal)
+	beforeDownload := testutil.ToFloat64(ftpDownloadTotal)
+	beforeInternalUp := testutil.ToFloat64(internalTransfersTotal.WithLabelValues("upload"))
+	beforeInternalDown := testutil.ToFloat64(internalTransfersTotal.WithLabelValues("download"))
+	beforeClientUp := testutil.ToFloat64(clientFilesTotal.WithLabelValues("172.25.222.49", "upload"))
+
+	logContent := `Sun Aug  9 16:34:50 2026 [pid 1001] [ftpupload] OK UPLOAD: Client "172.25.222.49", "/picture/poster/.listing", 0 bytes
+Sun Aug  9 16:34:51 2026 [pid 1001] [ftpupload] OK UPLOAD: Client "172.25.222.49", "/picture/real.jpg", 5120 bytes
+Sun Aug  9 16:34:52 2026 [pid 1002] [ftpupload] OK DOWNLOAD: Client "172.25.222.49", "/picture/archive/.listing", 0 bytes
+`
+	path := filepath.Join(t.TempDir(), "vsftpd.log")
+	if err := os.WriteFile(path, []byte(logContent), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	state := NewExporterState()
+	if err := parseVsftpdLog(&Config{}, path, state, nil); err != nil {
+		t.Fatalf("parseVsftpdLog 失败: %v", err)
+	}
+
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 1 {
+		t.Errorf("upload_total 增量 = %v, 期望 1(仅 real.jpg,.listing 不计)", got)
+	}
+	if got := testutil.ToFloat64(ftpDownloadTotal) - beforeDownload; got != 0 {
+		t.Errorf("download_total 增量 = %v, 期望 0(仅 .listing,不计)", got)
+	}
+	if got := testutil.ToFloat64(internalTransfersTotal.WithLabelValues("upload")) - beforeInternalUp; got != 1 {
+		t.Errorf("internal_transfers{upload} 增量 = %v, 期望 1(.listing 上传)", got)
+	}
+	if got := testutil.ToFloat64(internalTransfersTotal.WithLabelValues("download")) - beforeInternalDown; got != 1 {
+		t.Errorf("internal_transfers{download} 增量 = %v, 期望 1(.listing 下载)", got)
+	}
+	if got := testutil.ToFloat64(clientFilesTotal.WithLabelValues("172.25.222.49", "upload")) - beforeClientUp; got != 1 {
+		t.Errorf("client_files{...,upload} 增量 = %v, 期望 1(仅 real.jpg)", got)
 	}
 }

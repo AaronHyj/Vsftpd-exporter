@@ -431,30 +431,38 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 			// 按方向更新指标
 			var dirLabel string
 			if direction == "i" {
+				dirLabel = "upload"
+			} else {
+				dirLabel = "download"
+			}
+
+			// .listing / *.writing 等 vsftpd 内部/临时文件不计入业务传输统计(上传/下载
+			// 次数、字节量、后缀与客户端文件统计),仅计入 vsftp_internal_transfers_total,
+			// 避免目录列表缓存、上传临时文件大量污染业务指标(见 isNoiseTransfer/BUG-064)。
+			if isNoiseTransfer(filePath) {
+				internalTransfersTotal.WithLabelValues(dirLabel).Inc()
+				continue
+			}
+
+			if dirLabel == "upload" {
 				uploadCount++
 				ftpUploadTotal.Inc()
 				uploadBytesTotal.Add(float64(fileSize))
 				state.totalBytesUploaded += fileSize
-				dirLabel = "upload"
 			} else {
 				downloadCount++
 				ftpDownloadTotal.Inc()
 				downloadBytesTotal.Add(float64(fileSize))
 				state.totalBytesDownloaded += fileSize
-				dirLabel = "download"
 			}
 
 			totalBytesThisRound += fileSize
 
-			// .listing / *.writing 等 vsftpd 内部/临时文件不计入后缀与客户端文件统计,
-			// 避免目录列表缓存、上传临时文件大量污染 files_by_type / client_files(见 isNoiseTransfer)。
-			if !isNoiseTransfer(filePath) {
-				if clientIP != "" {
-					clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
-				}
-				ext := extractFileExtension(filePath)
-				state.recordTypeEvent(ext, dirLabel)
+			if clientIP != "" {
+				clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
 			}
+			ext := extractFileExtension(filePath)
+			state.recordTypeEvent(ext, dirLabel)
 			if transferTime > 0 {
 				transferDurationSeconds.Observe(float64(transferTime))
 			}
@@ -716,6 +724,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			// OK UPLOAD 事件
 			if matches := uploadOKRegex.FindStringSubmatch(line); matches != nil {
 				clientIP := matches[4]
+				// .listing / *.writing 等内部文件不计入业务上传统计,仅计入内部传输计数(BUG-064)
+				if isNoiseTransfer(matches[5]) {
+					internalTransfersTotal.WithLabelValues("upload").Inc()
+					continue
+				}
 				if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
 					// 记录传输事件时间范围与字节,供带宽/平均速度计算(BUG-042)
 					if eventTime, err := parseVsftpdTimestamp(matches[1]); err == nil {
@@ -747,6 +760,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			// OK DOWNLOAD 事件
 			if matches := downloadOKRegex.FindStringSubmatch(line); matches != nil {
 				clientIP := matches[4]
+				// .listing / *.writing 等内部文件不计入业务下载统计,仅计入内部传输计数(BUG-064)
+				if isNoiseTransfer(matches[5]) {
+					internalTransfersTotal.WithLabelValues("download").Inc()
+					continue
+				}
 				if bytes, err := strconv.ParseInt(matches[6], 10, 64); err == nil {
 					// 记录传输事件时间范围与字节,供带宽/平均速度计算(BUG-042)
 					if eventTime, err := parseVsftpdTimestamp(matches[1]); err == nil {
