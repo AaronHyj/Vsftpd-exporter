@@ -538,7 +538,7 @@ sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
 
 传输类指标（`vsftp_upload_total`、`vsftp_download_total`、`vsftp_upload_bytes_total`、`vsftp_download_bytes_total`、`vsftp_client_files_total`）以 xferlog 为权威来源；同时启用 vsftpd.log 时不会重复计数。`vsftp_user_connections_total` 按登录事件（OK LOGIN）计数，需要启用 vsftpd.log。
 
-### 日志级别
+### 日志级别与状态持久化
 
 通过 `-log-level` 参数控制日志输出级别，默认 `info`。可选值：`debug`、`info`、`warn`、`error`。
 
@@ -548,6 +548,14 @@ sum by (file_type) (increase(vsftp_files_by_type_total[$__range]))
 
 # 只输出警告和错误
 ./vsftp-exporter -log-level=warn
+```
+
+日志读取位置默认持久化到 `/tmp/vsftp-exporter-state.json`(可用 `-state-file` 覆盖)。
+exporter 重启后从上次读取位置继续解析,既不重放历史日志,也不丢失重启期间产生的新日志:
+
+```bash
+# 指定状态文件位置(需确保目录可写)
+./vsftp-exporter -state-file=/var/lib/vsftp-exporter/state.json
 ```
 
 ## 性能说明

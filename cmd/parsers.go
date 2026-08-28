@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,6 +39,11 @@ type ExporterState struct {
 	vsftpLogPosition int64
 	vsftpLogInode    uint64
 
+	// stateFilePath 指向读取位置持久化文件(默认 /tmp/vsftp-exporter-state.json,
+	// 可用 --state-file 覆盖)。每次解析结束后保存各日志文件的读取位置,
+	// 重启后据此从上次位置继续,既不重放历史也不丢重启期间的增量(BUG-071 增强)。
+	stateFilePath string
+
 	clientLastActivity map[string]time.Time
 	clientConnectTimes map[string]time.Time
 	activeProcessIDs   map[string]time.Time
@@ -68,6 +74,175 @@ func NewExporterState() *ExporterState {
 		pendingTypeSeq:      make(map[string]int64),
 		committedTypeLabels: make(map[string]bool),
 	}
+}
+
+// logReadState 记录单个日志文件的读取位置,用于跨重启恢复(BUG-071 增强)。
+type logReadState struct {
+	Path      string    `json:"path"`
+	Position  int64     `json:"position"`
+	Inode     uint64    `json:"inode"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// readStateFile 状态文件内容:按日志路径索引的读取位置。
+type readStateFile struct {
+	Version int                     `json:"version"`
+	Logs    map[string]logReadState `json:"logs"`
+}
+
+// initLogReadPosition 初始化日志读取位置:
+//  1. 若状态文件中存在该日志文件的记录且当前 inode 一致,恢复记录的 Position
+//     (跨重启从上次位置继续,不重放历史、不丢增量);
+//  2. 否则将位置初始化到文件末尾(tail -f 语义,首次启动/记录失效时),
+//     避免从文件头重放整个历史日志(BUG-071)。
+//
+// 支持本地文件与 SSH 远程文件两种方式;文件不存在时不修改位置(留待首次读取时处理)。
+func initLogReadPosition(sshMgr *SSHManager, filePath string, state *ExporterState, forVsftpdLog bool) {
+	var position *int64
+	var inode *uint64
+	if forVsftpdLog {
+		position = &state.vsftpLogPosition
+		inode = &state.vsftpLogInode
+	} else {
+		position = &state.lastPosition
+		inode = &state.lastInode
+	}
+	if *position != 0 || *inode != 0 {
+		// 已有读取位置(正常运行中),不干预
+		return
+	}
+
+	// 1. 优先从状态文件恢复
+	if restored, ok := restoreLogPosition(sshMgr, state, filePath); ok {
+		*position = restored.Position
+		*inode = restored.Inode
+		logName := "xferlog"
+		if forVsftpdLog {
+			logName = "vsftpd.log"
+		}
+		slog.Info("已从状态文件恢复日志读取位置", "path", filePath, "position", *position, "inode", *inode, "log", logName)
+		return
+	}
+
+	// 2. 无有效记录:初始化到文件末尾
+	curSize, curInode, ok := statLogFile(sshMgr, filePath)
+	if !ok {
+		return
+	}
+	*position = curSize
+	*inode = curInode
+	source := "本地"
+	if sshMgr != nil {
+		source = "SSH"
+	}
+	logName := "xferlog"
+	if forVsftpdLog {
+		logName = "vsftpd.log"
+	}
+	slog.Info("已初始化日志读取位置到文件末尾", "path", filePath, "position", *position, "inode", *inode, "source", source, "log", logName)
+}
+
+// statLogFile 获取日志文件的大小与 inode:SSH 远程模式通过远端 stat,本地模式
+// 通过 os.Stat。返回 (size, inode, ok)。
+func statLogFile(sshMgr *SSHManager, filePath string) (int64, uint64, bool) {
+	if sshMgr != nil {
+		command := fmt.Sprintf(`fp='%s'
+stat -c "%%s %%i" "$fp" 2>/dev/null || echo "0 0"`, filePath)
+		out, err := sshMgr.Execute(command)
+		if err != nil {
+			slog.Warn("stat 日志文件失败(SSH)", "path", filePath, "error", err)
+			return 0, 0, false
+		}
+		parts := strings.Fields(strings.TrimSpace(out))
+		if len(parts) < 2 {
+			slog.Warn("stat 日志文件输出异常(SSH)", "path", filePath, "out", out)
+			return 0, 0, false
+		}
+		size, err1 := strconv.ParseInt(parts[0], 10, 64)
+		ino, err2 := strconv.ParseUint(parts[1], 10, 64)
+		if err1 != nil || err2 != nil {
+			slog.Warn("stat 日志文件解析异常(SSH)", "path", filePath, "out", out)
+			return 0, 0, false
+		}
+		return size, ino, true
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		slog.Warn("stat 日志文件失败(本地)", "path", filePath, "error", err)
+		return 0, 0, false
+	}
+	return info.Size(), getFileInode(info), true
+}
+
+// restoreLogPosition 从状态文件恢复指定日志文件的读取位置。
+// 返回 (记录, true) 当且仅当:有该文件的记录、记录位置有效、且当前文件 inode 与
+// 记录一致(日志文件未被轮转/重建)。inode 不一致时返回 false,交由调用方按
+// "无记录"处理(初始化到末尾或走轮转逻辑)。
+// 支持本地与 SSH 远程两种日志来源(inode 校验都用对应方式 stat)。
+func restoreLogPosition(sshMgr *SSHManager, state *ExporterState, filePath string) (logReadState, bool) {
+	if state == nil || state.stateFilePath == "" {
+		return logReadState{}, false
+	}
+	data, err := os.ReadFile(state.stateFilePath)
+	if err != nil {
+		return logReadState{}, false // 无状态文件(首次)或不可读
+	}
+	var sf readStateFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		slog.Warn("读取位置状态文件解析失败", "path", state.stateFilePath, "error", err)
+		return logReadState{}, false
+	}
+	rec, ok := sf.Logs[filePath]
+	if !ok || rec.Position < 0 || rec.Inode == 0 {
+		return logReadState{}, false
+	}
+	// 校验当前文件 inode 与记录一致(本地/SSH 各自 stat)
+	_, curInode, ok := statLogFile(sshMgr, filePath)
+	if !ok {
+		return logReadState{}, false // 文件当前不可 stat,不采用旧位置
+	}
+	if curInode != rec.Inode {
+		return logReadState{}, false // 已轮转/重建,inode 变化,不采用旧位置
+	}
+	return rec, true
+}
+
+// saveLogPosition 将日志文件读取位置写入持久化状态文件。
+// 写临时文件后原子 rename,避免进程被杀留下半截文件。
+func saveLogPosition(state *ExporterState, filePath string, position int64, inode uint64) {
+	if state == nil || state.stateFilePath == "" {
+		return
+	}
+	// 读现有状态(若存在)
+	var sf readStateFile
+	sf.Version = 1
+	sf.Logs = make(map[string]logReadState)
+	if data, err := os.ReadFile(state.stateFilePath); err == nil {
+		if err := json.Unmarshal(data, &sf); err == nil && sf.Logs == nil {
+			sf.Logs = make(map[string]logReadState)
+		}
+	}
+	sf.Logs[filePath] = logReadState{
+		Path:      filePath,
+		Position:  position,
+		Inode:     inode,
+		UpdatedAt: time.Now(),
+	}
+	data, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		slog.Warn("序列化读取位置状态失败", "error", err)
+		return
+	}
+	tmp := state.stateFilePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		slog.Warn("写入读取位置状态文件失败", "path", state.stateFilePath, "error", err)
+		return
+	}
+	if err := os.Rename(tmp, state.stateFilePath); err != nil {
+		slog.Warn("更新读取位置状态文件失败", "path", state.stateFilePath, "error", err)
+		return
+	}
+	slog.Debug("已保存日志读取位置", "path", filePath, "position", position, "inode", inode, "state_file", state.stateFilePath)
 }
 
 func readRemoteFile(sshMgr *SSHManager, filePath string, startPosition int64, lastInode uint64) ([]string, int64, uint64, error) {
@@ -286,13 +461,13 @@ func extractFileExtension(filePath string) string {
 }
 
 // isNoiseTransfer 判断文件传输是否为 vsftpd 内部/遍历产生的噪音文件,此类
-// 文件不应计入 files_by_type_total / client_files_total(否则会被目录列表缓存、
-// 上传临时文件大量污染后缀统计)。当前识别两类:
+// 文件不应计入业务传输统计(upload/download 次数、字节量、files_by_type_total、
+// client_files_total),否则会被目录列表缓存、上传临时文件大量污染(BUG-064/069)。当前识别两类:
 //   - .listing  :vsftpd 目录列表缓存文件(客户端遍历目录时代 vsftpd 读写)
 //   - *.writing :vsftpd 上传临时文件(写完才改名为正式文件名)
 //
 // 仅按精确文件名后缀匹配,避免误伤真实的隐藏文件(如 .config)或含后缀名的业务文件(如 .listing.bak)。
-// 仅排除后缀/客户端文件统计,不影响 upload/download/bytes 等真实传输计数。
+// 命中时不计入业务计数,仅计入 vsftp_internal_transfers_total{direction}。
 func isNoiseTransfer(filePath string) bool {
 	base := filepath.Base(filePath)
 	if strings.HasSuffix(base, ".writing") {
@@ -496,6 +671,9 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 	}
 
 	state.commitPendingTypeEvents()
+
+	// 持久化读取位置,跨重启从上次位置继续(BUG-071 增强)
+	saveLogPosition(state, logPath, state.lastPosition, state.lastInode)
 
 	slog.Debug("FTP日志解析完成", "lines", totalLinesProcessed, "uploads", totalUploads, "downloads", totalDownloads, "incomplete", totalIncomplete)
 	return nil
@@ -867,6 +1045,9 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 			averageTransferSpeed.Set(float64(totalBytes) / programRunTime)
 		}
 	}
+
+	// 持久化读取位置,跨重启从上次位置继续(BUG-071 增强)
+	saveLogPosition(state, logPath, state.vsftpLogPosition, state.vsftpLogInode)
 
 	slog.Debug("vsftpd日志解析完成",
 		"lines", totalLinesProcessed,

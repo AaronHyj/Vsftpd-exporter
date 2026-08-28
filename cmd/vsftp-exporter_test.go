@@ -1241,3 +1241,223 @@ Sun Aug  9 16:34:52 2026 [pid 1002] [ftpupload] OK DOWNLOAD: Client "172.25.222.
 		t.Errorf("client_files{...,upload} 增量 = %v, 期望 1(仅 real.jpg)", got)
 	}
 }
+
+// TestInitLogReadPosition 验证启动时日志读取位置被初始化到文件末尾(tail -f 语义),
+// 从而 exporter 重启后不再从文件头重放历史日志(BUG-071)。
+func TestInitLogReadPosition(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	// 写入 5 行历史
+	content := `Wed Aug  5 10:00:00 2026 0 172.25.222.49 100 /a/1.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:01 2026 0 172.25.222.49 100 /a/2.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:02 2026 0 172.25.222.49 100 /a/3.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:03 2026 0 172.25.222.49 100 /a/4.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:04 2026 0 172.25.222.49 100 /a/5.jpg b _ i a u ftp 0 * c
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := NewExporterState()
+	initLogReadPosition(nil, path, state, false)
+	if state.lastPosition != info.Size() {
+		t.Errorf("lastPosition = %d, 期望文件末尾 %d", state.lastPosition, info.Size())
+	}
+	if state.lastInode == 0 {
+		t.Errorf("lastInode 不应为 0")
+	}
+
+	// vsftpd.log 位置独立初始化
+	state2 := NewExporterState()
+	initLogReadPosition(nil, path, state2, true)
+	if state2.vsftpLogPosition != info.Size() {
+		t.Errorf("vsftpLogPosition = %d, 期望文件末尾 %d", state2.vsftpLogPosition, info.Size())
+	}
+
+	// 已初始化过的位置不被覆盖(正常运行中)
+	state2.vsftpLogPosition = 123
+	state2.vsftpLogInode = 456
+	initLogReadPosition(nil, path, state2, true)
+	if state2.vsftpLogPosition != 123 {
+		t.Errorf("已初始化的 vsftpLogPosition 被覆盖: %d", state2.vsftpLogPosition)
+	}
+
+	// 文件不存在:不报错,保持 0
+	state3 := NewExporterState()
+	initLogReadPosition(nil, filepath.Join(tmpDir, "nope.log"), state3, false)
+	if state3.lastPosition != 0 {
+		t.Errorf("文件不存在时 lastPosition 应为 0, 实际 %d", state3.lastPosition)
+	}
+}
+
+// TestNoReplayAfterInit 端到端验证:初始化位置到文件末尾后首次解析,
+// 已有历史不会被重放;追加的新日志才被计数(BUG-071 回归测试)。
+func TestNoReplayAfterInit(t *testing.T) {
+	filesByTypeTotal.Reset()
+	beforeUpload := testutil.ToFloat64(ftpUploadTotal)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	// 3 条历史上传
+	content := `Wed Aug  5 10:00:00 2026 0 172.25.222.49 100 /a/1.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:01 2026 0 172.25.222.49 100 /a/2.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:02 2026 0 172.25.222.49 100 /a/3.jpg b _ i a u ftp 0 * c
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	state := NewExporterState()
+	state.lastProcessedTime = time.Now()
+	// 模拟启动初始化到文件末尾
+	initLogReadPosition(nil, path, state, false)
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("首次 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 0 {
+		t.Errorf("初始化到末尾后首次解析 upload_total 增量 = %v, 期望 0(历史不重放)", got)
+	}
+
+	// 追加 1 条新上传
+	appendLine := "Wed Aug  5 10:00:05 2026 0 172.25.222.49 100 /a/6.jpg b _ i a u ftp 0 * c\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(appendLine); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	if err := parseFTPLog(path, state, nil); err != nil {
+		t.Fatalf("第二轮 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 1 {
+		t.Errorf("追加新行后 upload_total 增量 = %v, 期望 1(仅新日志)", got)
+	}
+}
+
+// TestLogPositionPersistence 验证读取位置持久化:保存后重启(全新 state)能从上次
+// 位置继续,历史不重放、新增日志被消费(BUG-071 增强)。
+func TestLogPositionPersistence(t *testing.T) {
+	filesByTypeTotal.Reset()
+	beforeUpload := testutil.ToFloat64(ftpUploadTotal)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	stateFile := filepath.Join(tmpDir, "state.json")
+
+	// 3 条历史上传
+	content := `Wed Aug  5 10:00:00 2026 0 172.25.222.49 100 /a/1.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:01 2026 0 172.25.222.49 100 /a/2.jpg b _ i a u ftp 0 * c
+Wed Aug  5 10:00:02 2026 0 172.25.222.49 100 /a/3.jpg b _ i a u ftp 0 * c
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+
+	// 第一次运行:全新 state,初始化到末尾 → 历史不重放
+	state1 := NewExporterState()
+	state1.stateFilePath = stateFile
+	state1.lastProcessedTime = time.Now()
+	initLogReadPosition(nil, path, state1, false)
+	if err := parseFTPLog(path, state1, nil); err != nil {
+		t.Fatalf("第一次 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 0 {
+		t.Errorf("首次解析 upload_total 增量 = %v, 期望 0", got)
+	}
+	if state1.lastPosition == 0 {
+		t.Errorf("lastPosition 不应为 0")
+	}
+	// 状态文件应已写入
+	if _, err := os.Stat(stateFile); err != nil {
+		t.Fatalf("状态文件未生成: %v", err)
+	}
+
+	// 追加 2 条新上传
+	appendContent := "Wed Aug  5 10:00:05 2026 0 172.25.222.49 100 /a/6.jpg b _ i a u ftp 0 * c\nWed Aug  5 10:00:06 2026 0 172.25.222.49 100 /a/7.jpg b _ i a u ftp 0 * c\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(appendContent); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// 第二次解析(同进程):消费 2 条新增
+	if err := parseFTPLog(path, state1, nil); err != nil {
+		t.Fatalf("第二次 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 2 {
+		t.Errorf("追加后 upload_total 增量 = %v, 期望 2", got)
+	}
+
+	// 模拟重启:全新 state2,从状态文件恢复位置
+	state2 := NewExporterState()
+	state2.stateFilePath = stateFile
+	state2.lastProcessedTime = time.Now()
+	initLogReadPosition(nil, path, state2, false)
+	if state2.lastPosition != state1.lastPosition {
+		t.Errorf("重启后 lastPosition = %d, 期望恢复为 %d", state2.lastPosition, state1.lastPosition)
+	}
+	if err := parseFTPLog(path, state2, nil); err != nil {
+		t.Fatalf("重启后 parseFTPLog 失败: %v", err)
+	}
+	// 重启后:无新增 → 不重放
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 2 {
+		t.Errorf("重启后 upload_total 增量 = %v, 期望保持 2(不重放)", got)
+	}
+
+	// 再追加 1 条,重启后的进程能消费
+	append1 := "Wed Aug  5 10:00:07 2026 0 172.25.222.49 100 /a/8.jpg b _ i a u ftp 0 * c\n"
+	f2, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f2.WriteString(append1)
+	f2.Close()
+	if err := parseFTPLog(path, state2, nil); err != nil {
+		t.Fatalf("重启后追加 parseFTPLog 失败: %v", err)
+	}
+	if got := testutil.ToFloat64(ftpUploadTotal) - beforeUpload; got != 3 {
+		t.Errorf("重启后消费新增 upload_total 增量 = %v, 期望 3", got)
+	}
+}
+
+// TestLogPositionRotationRestart 验证日志轮转后旧位置不被误用(inode 变化 →
+// 不恢复旧位置),按现有轮转逻辑处理。
+func TestLogPositionRotationRestart(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "xferlog")
+	stateFile := filepath.Join(tmpDir, "state.json")
+
+	content := "Wed Aug  5 10:00:00 2026 0 172.25.222.49 100 /a/1.jpg b _ i a u ftp 0 * c\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试文件失败: %v", err)
+	}
+	state1 := NewExporterState()
+	state1.stateFilePath = stateFile
+	state1.lastProcessedTime = time.Now()
+	initLogReadPosition(nil, path, state1, false)
+	if err := parseFTPLog(path, state1, nil); err != nil {
+		t.Fatalf("首次 parseFTPLog 失败: %v", err)
+	}
+
+	// 轮转:把旧文件改名 .1,新建同名文件
+	os.Rename(path, path+".1")
+	if err := os.WriteFile(path, []byte("Wed Aug  5 10:00:10 2026 0 172.25.222.49 100 /b/9.jpg b _ i a u ftp 0 * c\n"), 0644); err != nil {
+		t.Fatalf("重建日志文件失败: %v", err)
+	}
+
+	// 重启:恢复位置时 inode 已变化 → 不应采用旧位置
+	state2 := NewExporterState()
+	state2.stateFilePath = stateFile
+	state2.lastProcessedTime = time.Now()
+	initLogReadPosition(nil, path, state2, false)
+	// inode 变化导致恢复失败 → 走初始化到末尾逻辑;新文件只有 1 行,位置应为该行字节数
+	info, _ := os.Stat(path)
+	if state2.lastPosition != info.Size() {
+		t.Errorf("轮转后 lastPosition = %d, 期望新文件大小 %d(未用旧位置)", state2.lastPosition, info.Size())
+	}
+}

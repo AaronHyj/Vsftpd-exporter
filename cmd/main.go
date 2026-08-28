@@ -158,6 +158,7 @@ func runChecks(config *Config, state *ExporterState, sshMgr *SSHManager) {
 func main() {
 	configFile := flag.String("config", "configs/config.json", "配置文件路径")
 	logLevel := flag.String("log-level", "info", "日志级别 (debug/info/warn/error)")
+	stateFile := flag.String("state-file", "/tmp/vsftp-exporter-state.json", "日志读取位置持久化文件路径(跨重启恢复,默认 /tmp/vsftp-exporter-state.json)")
 	flag.Parse()
 
 	var level slog.Level
@@ -184,6 +185,7 @@ func main() {
 	slog.Info("配置加载成功", "host", config.TargetHost, "port", config.FTPPort)
 
 	state := NewExporterState()
+	state.stateFilePath = *stateFile
 
 	var sshMgr *SSHManager
 	if config.NeedSSH {
@@ -199,6 +201,15 @@ func main() {
 	slog.Info("信号处理器已设置")
 
 	slog.Info("启动监控协程", "interval_seconds", config.CheckInterval)
+	// 首次启动将日志读取位置初始化到文件末尾(tail -f 语义),避免重启后
+	// 从文件头重放历史日志导致 upload/download/bytes 计数被历史填充(BUG-071)。
+	if config.LogFilePath != "" {
+		initLogReadPosition(sshMgr, config.LogFilePath, state, false)
+	}
+	if config.VsftplogEnabled && config.VsftplogFilePath != "" {
+		initLogReadPosition(sshMgr, config.VsftplogFilePath, state, true)
+	}
+
 	go func() {
 		safeRunChecks(config, state, sshMgr)
 

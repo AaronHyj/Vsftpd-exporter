@@ -539,7 +539,7 @@ The project uses a Gitea Actions workflow:
 
 Transfer metrics (`vsftp_upload_total`, `vsftp_download_total`, `vsftp_upload_bytes_total`, `vsftp_download_bytes_total`, `vsftp_client_files_total`) use xferlog as the authoritative source; enabling vsftpd.log does not double-count them. `vsftp_user_connections_total` is counted per login event (OK LOGIN) and requires vsftpd.log.
 
-### Log Levels
+### Log Level & State Persistence
 
 The `-log-level` flag controls the log output level, default `info`. Valid values: `debug`, `info`, `warn`, `error`.
 
@@ -549,6 +549,14 @@ The `-log-level` flag controls the log output level, default `info`. Valid value
 
 # Only warnings and errors
 ./vsftp-exporter -log-level=warn
+```
+
+The log read position is persisted to `/tmp/vsftp-exporter-state.json` by default (override with `-state-file`).
+After a restart, the exporter resumes from the last read position: neither replaying history nor losing new log lines written during the downtime:
+
+```bash
+# Custom state file path (directory must be writable)
+./vsftp-exporter -state-file=/var/lib/vsftp-exporter/state.json
 ```
 
 ## Performance

@@ -79,6 +79,7 @@
 | BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
 | BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
 | BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-071 | 高 | `cmd/parsers.go` / `cmd/main.go` | exporter 重启后 `lastPosition`/`lastInode` 归零(状态仅存内存),首次解析从日志文件头开始,把 xferlog/vsftpd.log 全部历史重新计入 upload/download/bytes 累计计数器;每次重启叠加一次,`increase($__range)` 面板出现异常暴涨(实测 14k 上传即历史总量被重放)。已修复:读取位置持久化到状态文件(默认 `/tmp/vsftp-exporter-state.json`,`-state-file` 可改),重启后从上次位置继续;无有效记录时才初始化到文件末尾(tail -f 语义)。历史不重放、重启期间新日志不丢失。 | 已修复 |
 | BUG-070 | 低 | `deploy/grafana-dashboard.json` / README | 仪表盘配套更新:新增「🔧 内部/遍历传输统计」行(面板116 内部传输总数 stat + 面板117 内部传输速率按方向 timeseries);「🔒 连接限制与超时」行(108/109-114)移动到仪表盘最底部;面板104(FTP 错误分类速率)从连接限制行下方归位到「⚠️ 错误与异常」行;仪表盘 version 3→4。README(中英)面板清单补充文件类型/内部传输/连接限制行。 | 已修复 |
 | BUG-069 | 中 | `cmd/parsers.go` / `cmd/metrics.go` | BUG-064 只过滤了`.listing`/`.writing` 进入后缀与客户端文件统计,仍会计入`vsftp_upload_total`/`vsftp_download_total` 及字节量;现网 xferlog 中目录列表缓存每秒几十条,导致"上传/下载次数"被内部文件主导失真。已改为:`.listing`/`*.writing` 完全不计入业务上传/下载次数、字节量与带宽,仅计入新增的 `vsftp_internal_transfers_total{direction}`(xferlog 与 vsftpd.log 两条路径一致)。 | 已修复 |
 | BUG-068 | 低 | `deploy/grafana-dashboard.json` | BUG-066 给 stat 面板设的 `legendFormat: "{{group}}"` 在单 group 部署下把 sequence名 显示在面板上(`textMode=value_and_name`),每个面板都显示 "Aotian"。已将 21 个单目标 stat 面板的 `textMode` 改为 `value`(只显示数值,不显示名称);多目标面板(最后登录时间、带宽与传输速度)保留 `value_and_name` 且 legend 为语义化名称,不受影响。 | 已修复 |
@@ -830,6 +831,40 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 **验证**:`deploy/grafana-dashboard.json` JSON 校验通过,44 面板零重叠,行顺序自上而下
 为:服务状态概览 → 传输统计 → 错误与异常 → 客户端与用户统计 → 文件类型统计 →
 内部/遍历传输统计 → 连接限制与超时(最底部);全部 expr 均含 `group="$group"` 过滤。
+
+
+
+### BUG-071:exporter 重启后重放整个历史日志,上传/下载计数异常暴涨(高)
+
+**位置**:`cmd/parsers.go`(`ExporterState`/`initLogReadPosition`)、`cmd/main.go`(启动初始化)。
+
+**问题**:`lastPosition`/`lastInode` 仅存于内存,exporter 重启(部署新版本、崩溃恢复、手动重启)后归零。
+首次解析时两个读取分支都会从**文件头**开始:本地分支 `Seek(0)`、SSH 分支 `head -n 1000`。
+于是 xferlog/vsftpd.log 里的**全部历史记录**被重新解析并计入 `vsftp_upload_total`/
+`vsftp_download_total`/`vsftp_upload_bytes_total` 等累计计数器,且**每次重启叠加一次**。
+用户部署含 BUG-069 过滤的新版本后,上传次数面板显示 14k——这不是 `.listing`/`.writing`
+过滤失效(过滤逻辑经测试验证正确),而是历史真实上传被整体重放:14k ≈ xferlog 历史真实上传总量。
+
+**复现**:写 3 条历史"完成"上传到 xferlog,以全新 `NewExporterState()`(lastPosition=0)调
+`parseFTPLog`,`vsftp_upload_total` 一次性 +3(有回归测试证明)。
+
+**修复**:
+- 新增读取位置持久化:每次解析结束把各日志文件的位置写入状态文件(默认
+  `/tmp/vsftp-exporter-state.json`,`-state-file` 可覆盖),写临时文件后原子 rename;
+- 重启后 `initLogReadPosition` 优先从状态文件恢复:同 inode 时用上次 Position 继续
+  (从上次位置续读,既不重放历史、也不丢重启期间产生的日志);inode 变化(日志轮转/重建)
+  则不采用旧位置,交由现有轮转逻辑处理;
+- 无有效记录(首次运行/状态文件缺失)时才初始化到文件末尾(SSH `stat -c "%s %i"` /
+  本地 `os.Stat`),tail -f 语义,只消费启动之后新追加的日志;
+- 对 xferlog 与 vsftpd.log 分别持久化(独立位置字段)。
+
+**影响**:行为变更——重启不再重放历史,upload/download/bytes 从"启动时刻"起计。
+已部署实例的历史累计不回退,重启后计数从新基线开始,`increase` 面板恢复正常量级。
+
+**验证**:`TestInitLogReadPosition`(本地/SSH 初始化、已初始化不覆盖、文件缺失不报错)、
+`TestNoReplayAfterInit`(初始化到末尾后历史不重放、追加新行才计数)、`TestLogPositionPersistence`
+(保存→重启→恢复位置→历史不重放→续读新增)、`TestLogPositionRotationRestart`(轮转后 inode 变化不误用旧位置)。
+`go build`/`go vet`/`go test -race -count=1`/gofmt 全绿。
 
 ## 已知特性说明
 
