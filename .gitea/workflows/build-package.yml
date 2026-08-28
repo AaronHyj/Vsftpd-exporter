@@ -39,6 +39,10 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # 拉取完整历史与全部 tag,否则 git describe 找不到上一版本 tag,
+          # Release Notes 会误判为"首版发布"(默认浅克隆只有当前一个 tag)
+          fetch-depth: 0
 
       - name: 检查 Go 环境
         # 直接用 runner 上已安装的 Go，不做 setup-go 下载
@@ -156,3 +160,16 @@ jobs:
               "${api}/repos/${repo}/releases/${release_id}" >/dev/null
           fi
           echo "release_id=${release_id}"
+
+          # ---- 上传构建产物到 Release 附件(与 release_id 同级,缺了会导致
+          # Release 只有源码包没有二进制附件,见 BUG-073)----
+          for f in vsftp-exporter-${VERSION}-*.tar.gz; do
+            [ -f "${f}" ] || continue
+            echo "上传附件: ${f} -> release ${release_id}"
+            curl -sS -X POST -H "${auth}" -H "Content-Type: application/octet-stream" \
+              --data-binary "@${f}" \
+              "${api}/repos/${repo}/releases/${release_id}/assets?name=${f}" \
+              -o /tmp/asset_resp.json -w "HTTP %{http_code}\n"
+            # 同名附件已存在时 Gitea 会返回错误,忽略(幂等重跑场景)
+            head -c 200 /tmp/asset_resp.json 2>/dev/null; echo
+          done

@@ -79,6 +79,7 @@
 | BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
 | BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
 | BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-073 | 高 | `.gitea/workflows/build-package.yml` / Gitea Release | v0.9.16 发布异常:①`actions/checkout@v4` 默认浅克隆只带当前 tag,`git describe` 找不到上一 tag,Release Notes 误判为「首版发布」;②上版重写 release step 时丢失了附件上传 for 循环,Release 无二进制附件只能下源码包。已修复:checkout 加 `fetch-depth: 0` 拉全量历史与 tag;补回附件上传循环(仅传当前 VERSION 的 tar.gz);已用 API 回填 v0.9.16 正文与 3 个平台附件。 | 已修复 |
 | BUG-072 | 低 | `deploy/grafana-dashboard.json` / README | 面板104「FTP 错误分类速率」与面板22 的「FTP 协议错误」合计线是同一指标(`vsftp_ftp_errors_total`)的总/分关系,图形重复。按用户要求改为 stat 面板:「FTP 协议错误」显示错误总数 + 所选时间范围增量(`[$__range]`),不再单占图表面板;version 4→5。错误面板去重后:面板22(5 条错误趋势)+ 面板23(传输错误按方向)+ 104(协议错误总数/增量 stat)。README(中英)错误监控行同步更新。 | 已修复 |
 | BUG-071 | 高 | `cmd/parsers.go` / `cmd/main.go` | exporter 重启后 `lastPosition`/`lastInode` 归零(状态仅存内存),首次解析从日志文件头开始,把 xferlog/vsftpd.log 全部历史重新计入 upload/download/bytes 累计计数器;每次重启叠加一次,`increase($__range)` 面板出现异常暴涨(实测 14k 上传即历史总量被重放)。已修复:读取位置持久化到状态文件(默认 `/tmp/vsftp-exporter-state.json`,`-state-file` 可改),重启后从上次位置继续;无有效记录时才初始化到文件末尾(tail -f 语义)。历史不重放、重启期间新日志不丢失。 | 已修复 |
 | BUG-070 | 低 | `deploy/grafana-dashboard.json` / README | 仪表盘配套更新:新增「🔧 内部/遍历传输统计」行(面板116 内部传输总数 stat + 面板117 内部传输速率按方向 timeseries);「🔒 连接限制与超时」行(108/109-114)移动到仪表盘最底部;面板104(FTP 错误分类速率)从连接限制行下方归位到「⚠️ 错误与异常」行;仪表盘 version 3→4。README(中英)面板清单补充文件类型/内部传输/连接限制行。 | 已修复 |
@@ -884,6 +885,32 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 - README(中英)错误监控行更新为"FTP 协议错误总计与所选时间范围增量(stat)"。
 
 **验证**:JSON 校验通过,version 4→5,44 面板零重叠;README 中英同步。
+
+
+
+### BUG-073:v0.9.16 发布误判"首版发布"且无二进制附件(高)
+
+**位置**:`.gitea/workflows/build-package.yml`、Gitea Release v0.9.16。
+
+**问题**(v0.9.16 推送 tag 后出现两个异常):
+1. **误判「首版发布」**:日志 `prev_tag=<none>`,`actions/checkout@v4` 默认浅克隆
+   (depth=1,不带历史与 tag),CI 工作区里 `git describe --tags v0.9.16^` 找不到
+   v0.9.15,`PREV_TAG` 为空 → 走「首版发布」分支,正文只列当前提交 d254b56。
+2. **无二进制附件**:重写 release step 生成 Release Notes 时,把原有附件上传
+   for 循环弄丢了;日志到 `release_id=4264` 结束,没有上传资产的输出。Gitea 的
+   v0.9.16 Release 只有「源代码 (ZIP)/(TAR.GZ)」,没有 3 个平台二进制包
+   (v0.9.15 及更早版本均有)。
+
+**修复**:
+- checkout 步骤加 `fetch-depth: 0`:拉取完整历史与全部 tag,`git describe` 可
+  正确定位上一版本 tag,Release Notes 恢复「变更内容(自 v0.9.15)」;
+- release step 末尾补回附件上传循环:`for f in vsftp-exporter-${VERSION}-*.tar.gz`,
+  逐个 POST 到 `releases/{id}/assets`;同名附件已存在时忽略错误(幂等重跑场景)。
+- 手工回填 v0.9.16:PATCH 正文改为「自 v0.9.15」的 3 条提交清单;上传
+  linux/windows/darwin 三个平台 tar.gz(本地交叉编译,与 CI 产物一致)。
+
+**验证**:YAML 校验通过;本地模拟浅克隆复现 `git describe` 失败 → 确认根因;
+API 复查 v0.9.16 attachments 已含 3 个二进制包,body 含 v0.9.15 起的变更清单。
 
 ## 已知特性说明
 
