@@ -1485,7 +1485,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "FTP 协议错误总数与所选时间范围内增量(源:vsftp_ftp_errors_total,按 reason 分类的合计)。替代原错误分类速率图,精简仪表盘。",
+      "description": "FTP 协议错误总数与所选时间范围增量(源:vsftp_ftp_errors_total,按 reason 分类的合计)。无 4xx/5xx 响应时无序列,用 or vector(0) 兜底显示 0 而非 No data。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1527,12 +1527,12 @@
       },
       "targets": [
         {
-          "expr": "sum(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"})",
+          "expr": "sum(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}) or on() vector(0)",
           "legendFormat": "错误总数",
           "refId": "A"
         },
         {
-          "expr": "sum(increase(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range]))",
+          "expr": "sum(increase(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])) or on() vector(0)",
           "legendFormat": "所选范围增量",
           "refId": "B"
         }
@@ -2516,5 +2516,5 @@
   "timezone": "browser",
   "title": "Vsftpd FTP 服务器监控仪表盘",
   "uid": "vsftpd-exporter-dashboard",
-  "version": 6
+  "version": 7
 }
