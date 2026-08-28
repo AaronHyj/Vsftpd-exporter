@@ -408,7 +408,7 @@ rule_files:
 
 仪表板特性：
 
-- 支持 `job` 和 `instance` 变量切换
+- 支持 `job`、`group`、`instance` 变量切换(`group` 来自 Prometheus 抓取配置的 `group` 标签,可选择 All)
 - 计数类与带宽面板均按仪表板所选时间段计算（`increase(...[$__range])`），并非进程启动以来的累计值
 - 默认 30 秒自动刷新
 - 中文面板标题

@@ -410,7 +410,7 @@ Dashboard features:
 
 - Counter and bandwidth panels are evaluated within the selected time range (`increase(...[$__range])`), not cumulative since exporter start
 
-- `job` and `instance` variable switching
+- `job`, `group` and `instance` variable switching (`group` comes from the `group` label of your Prometheus scrape config; selectable to `All`)
 - 30-second auto refresh by default
 - Panel titles in Chinese
 

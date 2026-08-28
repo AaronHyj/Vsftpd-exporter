@@ -79,6 +79,7 @@
 | BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
 | BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
 | BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-068 | 低 | `deploy/grafana-dashboard.json` | BUG-066 给 stat 面板设的 `legendFormat: "{{group}}"` 在单 group 部署下把 sequence名 显示在面板上(`textMode=value_and_name`),每个面板都显示 "Aotian"。已将 21 个单目标 stat 面板的 `textMode` 改为 `value`(只显示数值,不显示名称);多目标面板(最后登录时间、带宽与传输速度)保留 `value_and_name` 且 legend 为语义化名称,不受影响。 | 已修复 |
 | BUG-067 | 低 | `deploy/grafana-dashboard.json` | 带宽/速度重复展示且数据不一致:`「⚡ 带宽与速度指标」行(面板28 实时带宽、面板29 平均传输速度)与「📈 传输统计」中的面板14(传输速率 MiB/s)、面板15(带宽与传输速度)功能重复;且 28/29 基于计算型 gauge(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_bytes_per_second`),后者有 KNOWN-003 语义缺陷(总字节/总运行时长),数值与基于 counter(`rate`/`increase` on `vsftp_upload/download_bytes_total`)的面板14/15 不一致。已删除整行(面板28/29/107),保留准确的 counter 推导面板14/15。 | 已修复 |
 
 ## 详细说明
@@ -762,6 +763,23 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 
 **验证**:`deploy/grafana-dashboard.json` JSON 校验通过,重叠数 0,保留面板均正确归属原行。
 
+
+
+### BUG-068:单 group 部署下 stat 面板到处显示 group 名(BUG-066 遗留)(低)
+
+**位置**:`deploy/grafana-dashboard.json` 的 stat 面板。
+
+**问题**:BUG-066 为修复"图例暴露完整查询语句",给 stat 面板设 `legendFormat: "{{group}}"`;但
+这些面板 `textMode=value_and_name`(显示"名称+值"),而单 group 部署下序列名只有 `group=Aotian`
+一个维度,于是每个单目标 stat 面板都显示成 `Aotian <值>` 的噪音,不美观也无信息量。
+
+**修复**:将 **21 个单目标 stat 面板**的 `textMode` 由 `value_and_name` 改为 `value`,只显示数值,
+不再显示 group 名。`legendFormat={{group}}` 保留作为防御(将来若多 group 切回 value_and_name 仍可正常
+区分)。**多目标面板**(id=12 最后登录时间 2 个 target、id=15 带宽与传输速度 3 个 target)需用名称区分
+序列,保留 `value_and_name`,且其 legendFormat 本就是语义化中文名(日期/时间/上传平均带宽等),不受影响。
+
+**验证**:`deploy/grafana-dashboard.json` JSON 校验通过,面板数 41、零重叠;多目标面板仍为 value_and_name。
+
 ## 已知特性说明
 
 | 编号 | 说明 |
@@ -782,4 +800,5 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 | KNOWN-015 | `deploy/vsftpd-exporter.service` 的 `ExecStart` 原先指向自包含的 `/usr/local/vsftp-exporter/...` 布局,与 `make install`(装到 `/usr/local/bin/`)及 README systemd 示例(`/usr/local/bin/vsftp-exporter -config=/etc/vsftp-exporter/config.json`)不一致。已统一为与 README/Makefile 一致的布局。 |
 | KNOWN-016 | `vsftp_files_by_type_total` 冷启动标签的"0 暴露→提交增量"时序在**并发/慢抓取**下存在理论窗口:`pendingTypeSeq[key] < scrapeSeq` 的提交由"哪个 /metrics 抓取先完成"驱动,而非"哪个抓取实际看到了该标签的 0 采样"(`parsers.go:312`);若某快照早于标签注册、却先完成 bump,则该标签首个增量可能在真实 0 采样被任何抓取输出前就提交,`increase()` 低记一次(经典 counter hole)。单写者 check goroutine + 正常单个 Prometheus 串行抓取下极难触发(μs 级窗口);非崩溃、counter 仍单调。属设计权衡,要彻底消除需为每个 pending 标签记录"是否已被某次抓取输出过"而非仅比较 seq。 |
 | KNOWN-017 | `vsftp_pasv_port_rejections_total`(A4)基于 `425` FTP response 消息匹配,而 `425` 无 "pasv 端口" 专属字样,无法在日志层面与普通 425 数据连接建立失败(网络/防火墙)完全区分;统计的是"PASV/数据连接建立失败"总数,端口范围耗尽是主因之一但非唯一。当作数据连接建立失败的监控信号,而非精确的端口耗尽计数。 |
+| KNOWN-019 | 仪表盘模板变量除 `job`/`instance` 外新增 `group`(位于两者之间,含 All 选项):`group` 标签并非 exporter 产出,而是来自用户 Prometheus 抓取配置的 external_labels/relabel;`label_values(vsftp_login_success{job="$job"}, group)` 联动 job、`instance` 联动 job+group。所有面板 expr 均带 `group="$group"` 过滤;若部署无 `group` 标签,选择 All 时过滤等价于不过滤。 |
 | KNOWN-018 | `vsftp_idle_timeout_total`(A1)匹配 `421` + 消息含 `timeout`;vsftpd 的 `idle_session_timeout` 触发时通常报 `421 Timeout.`,消息含 "timeout" 判据可靠。极少数自定义 banner 或非标准响应若也在 421 里含 "timeout" 字样会被计入,实际冲突概率极低。 |

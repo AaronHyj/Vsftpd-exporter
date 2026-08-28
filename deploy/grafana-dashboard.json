@@ -111,7 +111,7 @@
       },
       "targets": [
         {
-          "expr": "vsftp_login_success{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_login_success{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -168,11 +168,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_connections{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_connections{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -229,11 +229,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_established_connections{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_established_connections{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -286,11 +286,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_close_wait_connections{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_close_wait_connections{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -339,11 +339,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_unique_clients{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_unique_clients{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -392,11 +392,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_active_processes{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_active_processes{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -462,11 +462,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "increase(vsftp_upload_total{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "expr": "increase(vsftp_upload_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -517,11 +517,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "increase(vsftp_download_total{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "expr": "increase(vsftp_download_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -572,11 +572,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "expr": "increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -627,11 +627,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "expr": "increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -683,11 +683,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "increase(vsftp_login_total{job=\"$job\", instance=\"$instance\"}[$__range])",
+          "expr": "increase(vsftp_login_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -771,7 +771,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "vsftp_last_login_time{job=\"$job\", instance=\"$instance\"} * 1000",
+          "expr": "vsftp_last_login_time{job=\"$job\", instance=\"$instance\", group=\"$group\"} * 1000",
           "legendFormat": "日期",
           "refId": "A"
         },
@@ -780,7 +780,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "vsftp_last_login_time{job=\"$job\", instance=\"$instance\"} * 1000",
+          "expr": "vsftp_last_login_time{job=\"$job\", instance=\"$instance\", group=\"$group\"} * 1000",
           "legendFormat": "时间",
           "refId": "B"
         }
@@ -835,17 +835,17 @@
       },
       "targets": [
         {
-          "expr": "vsftp_connections{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_connections{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "legendFormat": "总连接数",
           "refId": "A"
         },
         {
-          "expr": "vsftp_established_connections{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_established_connections{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "legendFormat": "ESTABLISHED",
           "refId": "B"
         },
         {
-          "expr": "vsftp_close_wait_connections{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_close_wait_connections{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "legendFormat": "CLOSE_WAIT",
           "refId": "C"
         }
@@ -900,12 +900,12 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[5m]) / 1024 / 1024",
+          "expr": "rate(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) / 1024 / 1024",
           "legendFormat": "上传速率",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[5m]) / 1024 / 1024",
+          "expr": "rate(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) / 1024 / 1024",
           "legendFormat": "下载速率",
           "refId": "B"
         }
@@ -963,7 +963,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range]) / ($__range_ms / 1000)",
+          "expr": "increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range]) / ($__range_ms / 1000)",
           "legendFormat": "上传平均带宽",
           "refId": "A"
         },
@@ -972,7 +972,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range]) / ($__range_ms / 1000)",
+          "expr": "increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range]) / ($__range_ms / 1000)",
           "legendFormat": "下载平均带宽",
           "refId": "B"
         },
@@ -981,7 +981,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "(increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range]) + increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\"}[$__range])) / ($__range_ms / 1000)",
+          "expr": "(increase(vsftp_upload_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range]) + increase(vsftp_download_bytes_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])) / ($__range_ms / 1000)",
           "legendFormat": "总平均带宽",
           "refId": "C"
         }
@@ -1028,17 +1028,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "expr": "histogram_quantile(0.50, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.90, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "expr": "histogram_quantile(0.90, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]))",
           "legendFormat": "p90",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "expr": "histogram_quantile(0.99, rate(vsftp_transfer_duration_seconds_bucket{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -1107,11 +1107,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_failed_logins_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_failed_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -1164,11 +1164,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_authentication_errors_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_authentication_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -1221,11 +1221,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_connection_timeouts_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_connection_timeouts_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -1278,11 +1278,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_max_connections_reached_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_max_connections_reached_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -1335,11 +1335,11 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value"
       },
       "targets": [
         {
-          "expr": "vsftp_rapid_reconnections_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_rapid_reconnections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "refId": "A",
           "legendFormat": "{{group}}"
         }
@@ -1393,27 +1393,27 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_failed_logins_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_failed_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "登录失败",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_authentication_errors_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_authentication_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "认证错误",
           "refId": "B"
         },
         {
-          "expr": "rate(vsftp_connection_timeouts_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_connection_timeouts_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "连接超时",
           "refId": "C"
         },
         {
-          "expr": "sum by (job, instance) (rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\"}[5m])) * 60",
+          "expr": "sum by (job, instance) (rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m])) * 60",
           "legendFormat": "传输错误",
           "refId": "D"
         },
         {
-          "expr": "sum by (job, instance) (rate(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\"}[5m])) * 60",
+          "expr": "sum by (job, instance) (rate(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m])) * 60",
           "legendFormat": "FTP 协议错误",
           "refId": "E"
         }
@@ -1467,12 +1467,12 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\", type=\"upload\"}[5m]) * 60",
+          "expr": "rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\", type=\"upload\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "上传错误",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\", type=\"download\"}[5m]) * 60",
+          "expr": "rate(vsftp_transfer_errors_total{job=\"$job\", instance=\"$instance\", type=\"download\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "下载错误",
           "refId": "B"
         }
@@ -1526,7 +1526,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (rate(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60)",
+          "expr": "sum by (reason) (rate(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -1594,7 +1594,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, rate(vsftp_client_connections_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60)",
+          "expr": "topk(10, rate(vsftp_client_connections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
           "legendFormat": "{{client_ip}}",
           "refId": "A"
         }
@@ -1646,7 +1646,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, rate(vsftp_user_logins_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60)",
+          "expr": "topk(10, rate(vsftp_user_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
           "legendFormat": "{{username}}",
           "refId": "A"
         }
@@ -1698,7 +1698,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, rate(vsftp_client_files_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60)",
+          "expr": "topk(10, rate(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
           "legendFormat": "{{client_ip}} ({{direction}})",
           "refId": "A"
         }
@@ -1747,17 +1747,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, rate(vsftp_connection_login_delay_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "expr": "histogram_quantile(0.50, rate(vsftp_connection_login_delay_seconds_bucket{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.90, rate(vsftp_connection_login_delay_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "expr": "histogram_quantile(0.90, rate(vsftp_connection_login_delay_seconds_bucket{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]))",
           "legendFormat": "p90",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, rate(vsftp_connection_login_delay_seconds_bucket{job=\"$job\", instance=\"$instance\"}[5m]))",
+          "expr": "histogram_quantile(0.99, rate(vsftp_connection_login_delay_seconds_bucket{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -1828,7 +1828,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (file_type) (increase(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\"}[$__range]))",
+          "expr": "sum by (file_type) (increase(vsftp_files_by_type_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range]))",
           "legendFormat": "{{file_type}}",
           "refId": "A"
         }
@@ -1899,7 +1899,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
@@ -1912,7 +1912,7 @@
       },
       "targets": [
         {
-          "expr": "vsftp_idle_timeout_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_idle_timeout_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "legendFormat": "{{group}}",
           "refId": "A"
         }
@@ -1967,7 +1967,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
@@ -1980,7 +1980,7 @@
       },
       "targets": [
         {
-          "expr": "vsftp_data_connection_timeout_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_data_connection_timeout_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "legendFormat": "{{group}}",
           "refId": "A"
         }
@@ -2035,7 +2035,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
@@ -2048,7 +2048,7 @@
       },
       "targets": [
         {
-          "expr": "sum(vsftp_connection_limit_rejections_total{reason=\"max_clients\", job=\"$job\", instance=\"$instance\"})",
+          "expr": "sum(vsftp_connection_limit_rejections_total{reason=\"max_clients\", job=\"$job\", instance=\"$instance\", group=\"$group\"})",
           "legendFormat": "{{group}}",
           "refId": "A"
         }
@@ -2103,7 +2103,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
@@ -2116,7 +2116,7 @@
       },
       "targets": [
         {
-          "expr": "sum(vsftp_connection_limit_rejections_total{reason=\"max_per_ip\", job=\"$job\", instance=\"$instance\"})",
+          "expr": "sum(vsftp_connection_limit_rejections_total{reason=\"max_per_ip\", job=\"$job\", instance=\"$instance\", group=\"$group\"})",
           "legendFormat": "{{group}}",
           "refId": "A"
         }
@@ -2171,7 +2171,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "legend": {
           "displayMode": "list",
           "placement": "bottom",
@@ -2184,7 +2184,7 @@
       },
       "targets": [
         {
-          "expr": "vsftp_pasv_port_rejections_total{job=\"$job\", instance=\"$instance\"}",
+          "expr": "vsftp_pasv_port_rejections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}",
           "legendFormat": "{{group}}",
           "refId": "A"
         }
@@ -2267,22 +2267,22 @@
       },
       "targets": [
         {
-          "expr": "rate(vsftp_idle_timeout_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_idle_timeout_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "idle_timeout",
           "refId": "A"
         },
         {
-          "expr": "rate(vsftp_data_connection_timeout_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_data_connection_timeout_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "data_conn_timeout",
           "refId": "B"
         },
         {
-          "expr": "rate(vsftp_connection_limit_rejections_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_connection_limit_rejections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "limit: {{reason}}",
           "refId": "C"
         },
         {
-          "expr": "rate(vsftp_pasv_port_rejections_total{job=\"$job\", instance=\"$instance\"}[5m]) * 60",
+          "expr": "rate(vsftp_pasv_port_rejections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60",
           "legendFormat": "pasv_port",
           "refId": "D"
         }
@@ -2327,6 +2327,28 @@
       {
         "current": {
           "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "description": "选择分组(来自 Prometheus 抓取标签 group)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Group",
+        "multi": false,
+        "name": "group",
+        "options": [],
+        "query": "label_values(vsftp_login_success{job=\"$job\"}, group)",
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": false,
           "text": "localhost:9101",
           "value": "localhost:9101"
         },
@@ -2341,7 +2363,7 @@
         "multi": false,
         "name": "instance",
         "options": [],
-        "query": "label_values(vsftp_login_success{job=\"$job\"}, instance)",
+        "query": "label_values(vsftp_login_success{job=\"$job\", group=\"$group\"}, instance)",
         "refresh": 1,
         "sort": 0,
         "type": "query"
