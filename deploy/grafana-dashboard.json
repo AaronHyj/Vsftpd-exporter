@@ -1485,54 +1485,60 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "按原因分类的 FTP 协议错误（认证失败、连接数超限、目录/文件不存在、权限、配额等）",
+      "description": "FTP 协议错误总数与所选时间范围内增量(源:vsftp_ftp_errors_total,按 reason 分类的合计)。替代原错误分类速率图,精简仪表盘。",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
-          "custom": {
-            "axisLabel": "次/分钟",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
           },
           "unit": "short"
-        }
+        },
+        "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
+        "h": 4,
+        "w": 12,
         "x": 0,
         "y": 39
       },
       "id": 104,
       "options": {
-        "legend": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
           "calcs": [
-            "mean",
-            "lastNotNull",
-            "max"
+            "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom"
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi"
-        }
+        "textMode": "value_and_name"
       },
       "targets": [
         {
-          "expr": "sum by (reason) (rate(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
-          "legendFormat": "{{reason}}",
+          "expr": "sum(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"})",
+          "legendFormat": "错误总数",
           "refId": "A"
+        },
+        {
+          "expr": "sum(increase(vsftp_ftp_errors_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range]))",
+          "legendFormat": "所选范围增量",
+          "refId": "B"
         }
       ],
-      "title": "FTP 错误分类速率 (次/分钟)",
-      "type": "timeseries"
+      "title": "FTP 协议错误",
+      "type": "stat"
     },
     {
       "collapsed": false,
@@ -1540,7 +1546,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 43
       },
       "id": 103,
       "panels": [],
@@ -1577,7 +1583,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 48
+        "y": 44
       },
       "id": 24,
       "options": {
@@ -1629,7 +1635,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 48
+        "y": 44
       },
       "id": 25,
       "options": {
@@ -1681,7 +1687,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 56
+        "y": 52
       },
       "id": 26,
       "options": {
@@ -1732,7 +1738,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 56
+        "y": 52
       },
       "id": 27,
       "options": {
@@ -1771,7 +1777,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 64
+        "y": 60
       },
       "id": 105,
       "panels": [],
@@ -1805,7 +1811,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 61
       },
       "id": 106,
       "options": {
@@ -1842,7 +1848,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 82
+        "y": 78
       },
       "id": 108,
       "panels": [],
@@ -1884,7 +1890,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 83
+        "y": 79
       },
       "id": 109,
       "options": {
@@ -1952,7 +1958,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 83
+        "y": 79
       },
       "id": 110,
       "options": {
@@ -2020,7 +2026,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 83
+        "y": 79
       },
       "id": 111,
       "options": {
@@ -2088,7 +2094,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 83
+        "y": 79
       },
       "id": 112,
       "options": {
@@ -2156,7 +2162,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 83
+        "y": 79
       },
       "id": 113,
       "options": {
@@ -2250,7 +2256,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 87
+        "y": 83
       },
       "id": 114,
       "options": {
@@ -2296,7 +2302,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 73
+        "y": 69
       },
       "id": 115,
       "panels": [],
@@ -2334,7 +2340,7 @@
         "h": 4,
         "w": 12,
         "x": 0,
-        "y": 74
+        "y": 70
       },
       "id": 116,
       "options": {
@@ -2390,7 +2396,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 74
+        "y": 70
       },
       "id": 117,
       "options": {
@@ -2510,5 +2516,5 @@
   "timezone": "browser",
   "title": "Vsftpd FTP 服务器监控仪表盘",
   "uid": "vsftpd-exporter-dashboard",
-  "version": 4
+  "version": 6
 }

@@ -79,6 +79,7 @@
 | BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
 | BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
 | BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-072 | 低 | `deploy/grafana-dashboard.json` / README | 面板104「FTP 错误分类速率」与面板22 的「FTP 协议错误」合计线是同一指标(`vsftp_ftp_errors_total`)的总/分关系,图形重复。按用户要求改为 stat 面板:「FTP 协议错误」显示错误总数 + 所选时间范围增量(`[$__range]`),不再单占图表面板;version 4→5。错误面板去重后:面板22(5 条错误趋势)+ 面板23(传输错误按方向)+ 104(协议错误总数/增量 stat)。README(中英)错误监控行同步更新。 | 已修复 |
 | BUG-071 | 高 | `cmd/parsers.go` / `cmd/main.go` | exporter 重启后 `lastPosition`/`lastInode` 归零(状态仅存内存),首次解析从日志文件头开始,把 xferlog/vsftpd.log 全部历史重新计入 upload/download/bytes 累计计数器;每次重启叠加一次,`increase($__range)` 面板出现异常暴涨(实测 14k 上传即历史总量被重放)。已修复:读取位置持久化到状态文件(默认 `/tmp/vsftp-exporter-state.json`,`-state-file` 可改),重启后从上次位置继续;无有效记录时才初始化到文件末尾(tail -f 语义)。历史不重放、重启期间新日志不丢失。 | 已修复 |
 | BUG-070 | 低 | `deploy/grafana-dashboard.json` / README | 仪表盘配套更新:新增「🔧 内部/遍历传输统计」行(面板116 内部传输总数 stat + 面板117 内部传输速率按方向 timeseries);「🔒 连接限制与超时」行(108/109-114)移动到仪表盘最底部;面板104(FTP 错误分类速率)从连接限制行下方归位到「⚠️ 错误与异常」行;仪表盘 version 3→4。README(中英)面板清单补充文件类型/内部传输/连接限制行。 | 已修复 |
 | BUG-069 | 中 | `cmd/parsers.go` / `cmd/metrics.go` | BUG-064 只过滤了`.listing`/`.writing` 进入后缀与客户端文件统计,仍会计入`vsftp_upload_total`/`vsftp_download_total` 及字节量;现网 xferlog 中目录列表缓存每秒几十条,导致"上传/下载次数"被内部文件主导失真。已改为:`.listing`/`*.writing` 完全不计入业务上传/下载次数、字节量与带宽,仅计入新增的 `vsftp_internal_transfers_total{direction}`(xferlog 与 vsftpd.log 两条路径一致)。 | 已修复 |
@@ -865,6 +866,24 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 `TestNoReplayAfterInit`(初始化到末尾后历史不重放、追加新行才计数)、`TestLogPositionPersistence`
 (保存→重启→恢复位置→历史不重放→续读新增)、`TestLogPositionRotationRestart`(轮转后 inode 变化不误用旧位置)。
 `go build`/`go vet`/`go test -race -count=1`/gofmt 全绿。
+
+
+
+### BUG-072:FTP 错误分类速率面板与错误趋势重复,改为 stat 面板(低)
+
+**位置**:`deploy/grafana-dashboard.json` 面板104、README(中英)面板清单。
+
+**问题**:面板104(「FTP 错误分类速率」timeseries,按 `reason` 拆分 `vsftp_ftp_errors_total`)
+与面板22(「错误速率趋势」第5条线「FTP 协议错误」,同一指标的合计)是**同一指标的总/分关系**。
+仪表盘已有两个错误速率图(面板22 全量趋势、面板23 传输错误按方向),104 的独立图价值有限且占版面。
+
+**修复**:面板104 改为 stat 面板:
+- 标题「FTP 协议错误」,gridPos 缩为 12x4;
+- 两个值:错误总数 `sum(vsftp_ftp_errors_total{...})` + 所选时间范围增量
+  `sum(increase(vsftp_ftp_errors_total{...}[$__range]))`(跟随仪表盘时间范围,与其他计数面板一致);
+- README(中英)错误监控行更新为"FTP 协议错误总计与所选时间范围增量(stat)"。
+
+**验证**:JSON 校验通过,version 4→5,44 面板零重叠;README 中英同步。
 
 ## 已知特性说明
 

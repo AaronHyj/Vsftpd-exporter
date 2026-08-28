@@ -405,7 +405,7 @@ rule_files:
 
 - Service status overview: FTP service status, total connections, active connections, unique clients, active processes
 - Transfer statistics: upload/download counts, byte increments and total logins (as increments within the selected time range), last login time split into separate date and time rows, average upload/download/total bandwidth over the selected time range, connection state trend, transfer rate (MiB/s)
-- Error monitoring: failed logins, authentication errors, connection timeouts, max-connections limit, rapid reconnections, and FTP protocol error rates split by `reason`
+- Error monitoring: failed logins, auth errors, connection timeouts, max-connections reached, rapid reconnections, plus FTP protocol error total and selected-range increment (stat)
 - File-type statistics: transfer counts aggregated by extension (`vsftp_files_by_type_total`)
 - Internal/traversal transfer statistics: `vsftp_internal_transfers_total` (directory-list cache `.listing`, upload temp files `*.writing` and other vsftpd internal/traversal transfers, separated from business upload/download counts), with a total stat and per-direction rate chart
 - Connection limits & timeouts (at the very bottom of the dashboard): idle-session timeout, data-connection timeout, max_clients, max_per_ip, PASV port failures and their rate trends
