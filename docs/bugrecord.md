@@ -79,6 +79,7 @@
 | BUG-064 | 中 | `cmd/parsers.go` | xferlog 文件后缀/客户端传输统计把 vsftpd 内部或遍历噪音计入`files_by_type_total`/`client_files_total`:目录列表缓存`.listing`(客户端遍历目录 vsftpd 读写)与上传临时文件`*.writing`(写完才改名)会大量污染后缀统计(实测 listing 可到百万级)。已新增 `isNoiseTransfer()` 精确按文件基名后缀匹配进行过滤。 | 已修复 |
 | BUG-065 | 中 | `cmd/parsers.go` | `summary_exclude` 对 CONNECT/FTP response/FAIL LOGIN 的来源 IP 过滤用字符串直接比较`clientIP == state.probeClientIP`,而 `probeClientIP` 为纯 IPv4(`172.25.x.x`)、vsftpd 在 `listen_ipv6` 下把来源记成 IPv4-mapped 形式(`::ffff:172.25.x.x`),两者恒不等导致过滤失效,探测自身被计入 `vsftp_client_connections_total` 与 `vsftp_rapid_reconnections_total`(探测每 30s 一次恰触发 ≤30s 快速重连)。已新增 `normalizeClientIP()`(去 `::ffff:` 前缀)后统一归一化比较。 | 已修复 |
 | BUG-066 | 低 | `deploy/grafana-dashboard.json` | 16 个 stat 面板的 target 未设置 `legendFormat`(其余 5 个新建面板用 `__auto`),stat 面板 `textMode=value_and_name` 时图例退化成显示完整 PromQL 序列标识(如 `vsftp_established_connections{group="Aotian", instance="...[9101]", job="vsftpdMon"}`),把指标查询语句暴露在仪表盘上。已统一为 `legendFormat: "{{group}}"`。 | 已修复 |
+| BUG-074 | 中 | `cmd/parsers.go` / 仪表盘「客户端连接速率 Top 10」 | vsftpd 多进程并发写日志偶发两行粘连,CONNECT 行 `Client "::ffff:` 后混入下一行日志文本,正则 `[^"]+` 把整个脏串当 IP 作 Prometheus label,产生垃圾序列(如 `::ffff:Sun Aug 30 12:47:23 2026 [pid 1]...`)。已修复:新增 `isValidClientIP` 用 `net.ParseIP` 校验,5 处用 clientIP 作 label 的入口(CONNECT/OK LOGIN/xferlog/uploadOK/downloadOK)统一拦截非法 IP;脏行不再生成序列。 | 已修复 |
 | BUG-073 | 高 | `.gitea/workflows/build-package.yml` / Gitea Release | v0.9.16 发布异常:①`actions/checkout@v4` 默认浅克隆只带当前 tag,`git describe` 找不到上一 tag,Release Notes 误判为「首版发布」;②上版重写 release step 时丢失了附件上传 for 循环,Release 无二进制附件只能下源码包。已修复:checkout 加 `fetch-depth: 0` 拉全量历史与 tag;补回附件上传循环(仅传当前 VERSION 的 tar.gz);已用 API 回填 v0.9.16 正文与 3 个平台附件。 | 已修复 |
 | BUG-072 | 低 | `deploy/grafana-dashboard.json` / README | 面板104「FTP 错误分类速率」与面板22 的「FTP 协议错误」合计线是同一指标(`vsftp_ftp_errors_total`)的总/分关系,图形重复。按用户要求改为 stat 面板:「FTP 协议错误」显示错误总数 + 所选时间范围增量(`[$__range]`),不再单占图表面板;version 4→5。错误面板去重后:面板22(5 条错误趋势)+ 面板23(传输错误按方向)+ 104(协议错误总数/增量 stat)。README(中英)错误监控行同步更新。 | 已修复 |
 | BUG-071 | 高 | `cmd/parsers.go` / `cmd/main.go` | exporter 重启后 `lastPosition`/`lastInode` 归零(状态仅存内存),首次解析从日志文件头开始,把 xferlog/vsftpd.log 全部历史重新计入 upload/download/bytes 累计计数器;每次重启叠加一次,`increase($__range)` 面板出现异常暴涨(实测 14k 上传即历史总量被重放)。已修复:读取位置持久化到状态文件(默认 `/tmp/vsftp-exporter-state.json`,`-state-file` 可改),重启后从上次位置继续;无有效记录时才初始化到文件末尾(tail -f 语义)。历史不重放、重启期间新日志不丢失。 | 已修复 |
@@ -911,6 +912,38 @@ metric(`vsftp_bandwidth_usage_bytes_per_second`/`vsftp_average_transfer_speed_by
 
 **验证**:YAML 校验通过;本地模拟浅克隆复现 `git describe` 失败 → 确认根因;
 API 复查 v0.9.16 attachments 已含 3 个二进制包,body 含 v0.9.15 起的变更清单。
+
+
+
+### BUG-074:客户端连接速率 Top10 出现粘连日志文本的垃圾 IP(中)
+
+**位置**:`cmd/parsers.go`、仪表盘面板 24「客户端连接速率 Top 10」。
+
+**问题**:面板 24 出现形如 `::ffff:Sun Aug 30 12:47:23 2026 [pid 1] [ftpupload] OK LOGIN: Client`
+的"客户端",疑似解析问题。经本地复现确认:vsftpd 多进程并发写 /var/log/vsftpd.log 时
+偶发**两行日志粘连**,CONNECT 行的 `Client "::ffff:` 后直接混入下一行日志的完整文本。
+解析正则 `[^"]+` 会一直匹配到下一个引号,把整段脏串当成 client_ip,导致
+`clientConnectionsTotal` 生成垃圾 label 序列(且每次脏行出现都会 Inc,污染 Top10 与
+连接速率统计;`clientFilesTotal` 的三处入口同理)。
+
+**根因**:解析器对 clientIP 字段只做正则提取,未校验是否为合法 IP:
+- 正常:vsftpd 仅记录 4xx/5xx `FTP response`(982-993);
+- 传输错误是 xferlog 的**不完整传输**事件,走完全独立的 `transferErrorsTotal` 计数(599-601)。
+
+**修复**:
+- 新增 `isValidClientIP(ip)`:用 `net.ParseIP` 校验,天然接受 IPv4、IPv6、
+  IPv4-mapped IPv6(`::ffff:a.b.c.d`),拒绝粘连脏串与任何非 IP 文本;
+- 5 处用 clientIP 作 Prometheus label 的入口统一拦截:
+  - CONNECT(`clientConnectionsTotal`)——本次脏 IP 出现处;
+  - OK LOGIN(`userConnectionsTotal` 用户名维度,IP 仅进 state,不直接作 label,
+    但为一致性同样拦截,避免 state 被脏 key 污染);
+  - xferlog 完成传输(`clientFilesTotal`)——字段 6 remote host;
+  - OK UPLOAD / OK DOWNLOAD(`clientFilesTotal`)。
+- 畸形行直接丢弃,不计数、不写 state。
+
+**验证**:新增 `TestDirtyClientIPDropped`(脏行不再产生序列、正常 `::ffff:` v4 映射
+计数=1)、`TestValidClientIPAccepted`(8 种 IP 形态判定正确);go build/vet/
+test -race 全绿。
 
 ## 已知特性说明
 

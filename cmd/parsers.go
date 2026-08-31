@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -485,6 +486,15 @@ func normalizeClientIP(ip string) string {
 	return strings.TrimPrefix(ip, "::ffff:")
 }
 
+// isValidClientIP 校验来源 IP 是否为合法 IP 地址。vsftpd 多进程并发写日志时,
+// 偶发两行日志粘连(如 CONNECT 行的 Client "::ffff: 后混入下一行文本),
+// 正则 [^"]+ 会把整个脏串当成 IP,若直接作为 Prometheus label 会生成垃圾序列
+// (见 BUG-074:客户端连接速率 Top10 出现 "::ffff:Sun Aug 30 12:47:23 2026 ...")。
+// net.ParseIP 同时接受 IPv4、IPv6 与 IPv4-mapped IPv6("::ffff:a.b.c.d")。
+func isValidClientIP(ip string) bool {
+	return net.ParseIP(ip) != nil
+}
+
 // recordTypeEvent 记录一次按后缀和方向的文件传输。已提交的标签直接 Inc();
 // 首次见到的标签先用 Add(0) 注册 0 值系列并暂存计数,待抓取到 0 采样后再提交,
 // 使 increase()[$__range] 能观测到该标签的首次增量。
@@ -633,7 +643,7 @@ func parseFTPLog(logPath string, state *ExporterState, sshMgr *SSHManager) error
 
 			totalBytesThisRound += fileSize
 
-			if clientIP != "" {
+			if clientIP != "" && isValidClientIP(clientIP) {
 				clientFilesTotal.WithLabelValues(clientIP, dirLabel).Inc()
 			}
 			ext := extractFileExtension(filePath)
@@ -822,6 +832,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				processID := matches[2]
 				clientIP := matches[3]
 
+				// 日志偶发两行粘连导致 IP 字段混入日志文本,非法 IP 直接丢弃(BUG-074)
+				if !isValidClientIP(clientIP) {
+					continue
+				}
+
 				// summary_exclude 开启时，忽略健康检查探测产生的连接
 				if config.SummaryExclude && state.probeClientIP != "" && normalizeClientIP(clientIP) == normalizeClientIP(state.probeClientIP) {
 					continue
@@ -852,6 +867,11 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 				processID := matches[2]
 				username := matches[3]
 				clientIP := matches[4]
+
+				// 日志偶发粘连导致 IP 混入文本,非法 IP 丢弃(BUG-074)
+				if !isValidClientIP(clientIP) {
+					continue
+				}
 
 				// summary_exclude 开启时，忽略健康检查探测账号的登录事件
 				if config.SummaryExclude && username == config.FTPUser {
@@ -927,7 +947,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 						state.totalBytesUploaded += bytes
 						ftpUploadTotal.Inc()
 						uploadBytesTotal.Add(float64(bytes))
-						if clientIP != "" {
+						if clientIP != "" && isValidClientIP(clientIP) {
 							clientFilesTotal.WithLabelValues(clientIP, "upload").Inc()
 						}
 					}
@@ -963,7 +983,7 @@ func parseVsftpdLog(config *Config, logPath string, state *ExporterState, sshMgr
 						state.totalBytesDownloaded += bytes
 						ftpDownloadTotal.Inc()
 						downloadBytesTotal.Add(float64(bytes))
-						if clientIP != "" {
+						if clientIP != "" && isValidClientIP(clientIP) {
 							clientFilesTotal.WithLabelValues(clientIP, "download").Inc()
 						}
 					}
