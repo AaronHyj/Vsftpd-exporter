@@ -1616,23 +1616,20 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "按用户名统计登录数 Top 10",
+      "description": "所选时间范围内登录成功次数最多的前 10 个用户名(对 vsftp_user_logins_total 取 increase($__range),即该时间段内的登录总数)",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
-            "axisLabel": "次/分钟",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
+            "fillOpacity": 70,
+            "gradientMode": "none"
           },
-          "unit": "short"
-        }
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
@@ -1642,49 +1639,52 @@
       },
       "id": 25,
       "options": {
-        "legend": {
+        "displayMode": "basic",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
           "calcs": [
             "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom"
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi"
+        "showUnfilled": true,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
         }
       },
       "targets": [
         {
-          "expr": "topk(10, rate(vsftp_user_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
+          "expr": "topk(10, sum by (username) (increase(vsftp_user_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])))",
           "legendFormat": "{{username}}",
           "refId": "A"
         }
       ],
-      "title": "用户登录速率 Top 10",
-      "type": "timeseries"
+      "title": "用户登录数量 Top 10",
+      "type": "bargauge"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "按客户端 IP 和方向统计文件传输数",
+      "description": "所选时间范围内文件传输次数最多的前 10 个客户端 IP(上+下行合计,对 vsftp_client_files_total 取 increase($__range))",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "palette-classic"
           },
           "custom": {
-            "axisLabel": "次/分钟",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
+            "fillOpacity": 70,
+            "gradientMode": "none"
           },
-          "unit": "short"
-        }
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
@@ -1694,26 +1694,32 @@
       },
       "id": 26,
       "options": {
-        "legend": {
+        "displayMode": "basic",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
           "calcs": [
             "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom"
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi"
+        "showUnfilled": true,
+        "text": {
+          "titleSize": 12,
+          "valueSize": 14
         }
       },
       "targets": [
         {
-          "expr": "topk(10, rate(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[5m]) * 60)",
-          "legendFormat": "{{client_ip}} ({{direction}})",
+          "expr": "topk(10, sum by (client_ip) (increase(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])))",
+          "legendFormat": "{{client_ip}}",
           "refId": "A"
         }
       ],
-      "title": "客户端文件传输速率 Top 10",
-      "type": "timeseries"
+      "title": "客户端文件传输数量 Top 10",
+      "type": "bargauge"
     },
     {
       "datasource": {
@@ -2519,5 +2525,5 @@
   "timezone": "browser",
   "title": "Vsftpd FTP 服务器监控仪表盘",
   "uid": "vsftpd-exporter-dashboard",
-  "version": 8
+  "version": 9
 }
