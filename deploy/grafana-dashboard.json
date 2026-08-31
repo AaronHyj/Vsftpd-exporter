@@ -1561,7 +1561,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "所选时间范围内连接次数最多的前 10 个客户端 IP(对 vsftp_client_connections_total 取 increase($__range),即该时间段内的连接总数)",
+      "description": "所选时间范围内连接次数最多的前 10 个客户端 IP,只展示非 0 的连接数(不足 10 个则全部展示)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1603,7 +1603,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (client_ip) (increase(vsftp_client_connections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])))",
+          "expr": "topk(10, sum by (client_ip) (increase(vsftp_client_connections_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])) > 0)",
           "legendFormat": "{{client_ip}}",
           "refId": "A"
         }
@@ -1616,7 +1616,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "所选时间范围内登录成功次数最多的前 10 个用户名(对 vsftp_user_logins_total 取 increase($__range),即该时间段内的登录总数)",
+      "description": "所选时间范围内登录成功次数最多的前 10 个用户名,只展示非 0 的登录数(不足 10 个则全部展示)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1658,7 +1658,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (username) (increase(vsftp_user_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])))",
+          "expr": "topk(10, sum by (username) (increase(vsftp_user_logins_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])) > 0)",
           "legendFormat": "{{username}}",
           "refId": "A"
         }
@@ -1671,7 +1671,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "所选时间范围内文件传输次数最多的前 10 个客户端 IP(上+下行合计,对 vsftp_client_files_total 取 increase($__range))",
+      "description": "所选时间范围内文件传输次数最多的前 10 个客户端 IP(上+下行合计),只展示非 0 的传输数(不足 10 个则全部展示)",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1713,7 +1713,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (client_ip) (increase(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])))",
+          "expr": "topk(10, sum by (client_ip) (increase(vsftp_client_files_total{job=\"$job\", instance=\"$instance\", group=\"$group\"}[$__range])) > 0)",
           "legendFormat": "{{client_ip}}",
           "refId": "A"
         }
@@ -2525,5 +2525,5 @@
   "timezone": "browser",
   "title": "Vsftpd FTP 服务器监控仪表盘",
   "uid": "vsftpd-exporter-dashboard",
-  "version": 9
+  "version": 10
 }

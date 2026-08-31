@@ -440,14 +440,14 @@ rate(vsftp_download_bytes_total[5m]) / 1024 / 1024
 # 活跃用户数
 count(rate(vsftp_user_logins_total[5m]) > 0)
 
-# Top 10 客户端连接(所选时间范围内连接总数)
-topk(10, sum by (client_ip) (increase(vsftp_client_connections_total[$__range])))
+# Top 10 客户端连接(所选时间范围内连接总数,只展示非 0,最多 10 个)
+topk(10, sum by (client_ip) (increase(vsftp_client_connections_total[$__range])) > 0)
 
-# Top 10 用户登录(所选时间范围内登录总数)
-topk(10, sum by (username) (increase(vsftp_user_logins_total[$__range])))
+# Top 10 用户登录(所选时间范围内登录总数,只展示非 0,最多 10 个)
+topk(10, sum by (username) (increase(vsftp_user_logins_total[$__range])) > 0)
 
-# Top 10 客户端文件传输(所选时间范围内传输总数,上传+下载合计)
-topk(10, sum by (client_ip) (increase(vsftp_client_files_total[$__range])))
+# Top 10 客户端文件传输(所选时间范围内传输总数,上传+下载合计,只展示非 0,最多 10 个)
+topk(10, sum by (client_ip) (increase(vsftp_client_files_total[$__range])) > 0)
 
 # 按原因分类的 FTP 错误
 sum by (reason) (rate(vsftp_ftp_errors_total[5m]))

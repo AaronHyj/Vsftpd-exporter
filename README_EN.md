@@ -441,14 +441,14 @@ rate(vsftp_download_bytes_total[5m]) / 1024 / 1024
 # Active users
 count(rate(vsftp_user_logins_total[5m]) > 0)
 
-# Top 10 client connections (total connections in the selected time range)
-topk(10, sum by (client_ip) (increase(vsftp_client_connections_total[$__range])))
+# Top 10 client connections (total in the selected time range, non-zero only, max 10)
+topk(10, sum by (client_ip) (increase(vsftp_client_connections_total[$__range])) > 0)
 
-# Top 10 user logins (total logins in the selected time range)
-topk(10, sum by (username) (increase(vsftp_user_logins_total[$__range])))
+# Top 10 user logins (total in the selected time range, non-zero only, max 10)
+topk(10, sum by (username) (increase(vsftp_user_logins_total[$__range])) > 0)
 
-# Top 10 client file transfers (total transfers in the selected time range, upload+download)
-topk(10, sum by (client_ip) (increase(vsftp_client_files_total[$__range])))
+# Top 10 client file transfers (total in the selected time range, upload+download, non-zero only, max 10)
+topk(10, sum by (client_ip) (increase(vsftp_client_files_total[$__range])) > 0)
 
 # FTP errors by reason
 sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
