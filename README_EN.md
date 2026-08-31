@@ -441,8 +441,8 @@ rate(vsftp_download_bytes_total[5m]) / 1024 / 1024
 # Active users
 count(rate(vsftp_user_logins_total[5m]) > 0)
 
-# Top 10 client connections
-topk(10, rate(vsftp_client_connections_total[5m]))
+# Top 10 client connections (total connections in the selected time range)
+topk(10, sum by (client_ip) (increase(vsftp_client_connections_total[$__range])))
 
 # FTP errors by reason
 sum by (reason) (rate(vsftp_ftp_errors_total[5m]))
